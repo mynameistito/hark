@@ -1135,4 +1135,88 @@ describe("agent notifications", () => {
     });
     expect(tracked).toHaveLength(0);
   });
+
+  it("stores project metadata, pushes the summary, and shares projects across surfaces", async () => {
+    const { and, eq } = await import("drizzle-orm");
+    sent.length = 0;
+    const response = await createNotification({
+      body: `long report ${"detail ".repeat(700)}`,
+      title: "Deploy bot",
+      project: "Acme App",
+      summary: "3 services deployed",
+      bodyFormat: "markdown",
+    });
+    expect(response.status).toBe(201);
+    const body = (await response.json()) as {
+      notification: { id: string; projectId: string | null; summary: string | null };
+      message?: string;
+    };
+    expect(body.message).toBeUndefined();
+    expect(body.notification.summary).toBe("3 services deployed");
+    expect(body.notification.projectId).toMatch(/^prj_/);
+
+    const [row] = await db
+      .select()
+      .from(schema.agentNotification)
+      .where(eq(schema.agentNotification.id, body.notification.id));
+    expect(row).toMatchObject({
+      summary: "3 services deployed",
+      bodyFormat: "markdown",
+      readAt: null,
+      projectId: body.notification.projectId,
+    });
+
+    // Push text is the summary; the full body never enters the push payload.
+    expect(sent[0]).toMatchObject({ body: "3 services deployed" });
+    expect(((sent[0]?.data ?? {}) as Record<string, unknown>).projectId).toBe(
+      body.notification.projectId,
+    );
+    expect(JSON.stringify(sent[0])).not.toContain("long report");
+
+    // Reusing the same display name case-insensitively resolves to one project.
+    const reuse = await createNotification({ body: "Two", project: "ACME APP" });
+    const reuseBody = (await reuse.json()) as { notification: { projectId: string | null } };
+    expect(reuseBody.notification.projectId).toBe(body.notification.projectId);
+    const projects = await db
+      .select()
+      .from(schema.project)
+      .where(
+        and(eq(schema.project.userId, "user_1"), eq(schema.project.normalizedName, "acme app")),
+      );
+    expect(projects).toHaveLength(1);
+  });
+
+  it("keeps replays on their original project and old payload hashes stable", async () => {
+    const { eq } = await import("drizzle-orm");
+    const payload = { body: "Replayed", project: "Replay Project" };
+    const first = await createNotification(payload, "notify-prj-1");
+    expect(first.status).toBe(201);
+    const firstBody = (await first.json()) as { notification: { id: string } };
+
+    const replay = await createNotification(payload, "notify-prj-1");
+    expect(replay.status).toBe(200);
+    expect(await replay.json()).toMatchObject({
+      idempotent: true,
+      notification: { id: firstBody.notification.id },
+    });
+
+    // An old-schema request replayed against the new schema keeps matching
+    // the stored request hash: same key + same legacy payload replays cleanly.
+    const legacyPayload = { body: "Legacy payload", title: "Deploy bot" };
+    const legacyFirst = await createNotification(legacyPayload, "notify-legacy-1");
+    expect(legacyFirst.status).toBe(201);
+    const legacyRow = await db
+      .select({ requestHash: schema.agentNotification.requestHash })
+      .from(schema.agentNotification)
+      .where(eq(schema.agentNotification.idempotencyKey, "notify-legacy-1"));
+    const { createHash } = await import("node:crypto");
+    const { agentNotificationCreateSchema } = await import("@hark/contracts");
+    const expectedHash = createHash("sha256")
+      .update(JSON.stringify(agentNotificationCreateSchema.parse(legacyPayload)))
+      .digest("hex");
+    expect(legacyRow[0]?.requestHash).toBe(expectedHash);
+    const legacyReplay = await createNotification(legacyPayload, "notify-legacy-1");
+    expect(legacyReplay.status).toBe(200);
+    expect(await legacyReplay.json()).toMatchObject({ idempotent: true });
+  });
 });

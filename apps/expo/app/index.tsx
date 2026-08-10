@@ -58,7 +58,6 @@ export default function SignInScreen() {
       </View>
 
       <View style={styles.hero}>
-        <Text style={styles.eyebrow}>Webhooks to iPhone</Text>
         <Text style={styles.title}>Let the important things find you.</Text>
         <Text style={styles.subtitle}>
           Sign in to receive source-branded notifications from every service you connect.
@@ -133,14 +132,6 @@ const styles = StyleSheet.create({
     flex: 1,
     alignItems: "flex-start",
     justifyContent: "center",
-  },
-  eyebrow: {
-    marginBottom: 14,
-    color: colors.accent,
-    fontFamily: fonts.medium,
-    fontSize: 12,
-    letterSpacing: tightTracking(12),
-    textTransform: "uppercase",
   },
   title: {
     maxWidth: 330,

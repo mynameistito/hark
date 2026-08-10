@@ -627,6 +627,8 @@ describe("POST /hooks/:token/events/:eventId/withdraw", () => {
       .from(schema.interaction)
       .where(eq(schema.interaction.id, "int_withdraw"));
     expect(savedEvent?.status).toBe("withdrawn");
+    // Withdrawal marks the event read so it cannot linger as a ghost unread item.
+    expect(savedEvent?.readAt).toBeInstanceOf(Date);
     expect(savedInteraction).toMatchObject({ status: "canceled" });
     expect(savedInteraction?.canceledAt).toBeInstanceOf(Date);
 
@@ -700,5 +702,175 @@ describe("POST /hooks/:token/events/:eventId/withdraw", () => {
       .where(eq(schema.device.id, "dev_withdraw_fail"));
     expect(savedEvent?.status).toBe("accepted");
     expect(savedDevice?.active).toBe(false);
+  });
+});
+
+describe("webhook project, summary, and body capacity", () => {
+  it("stores project, summary, and bodyFormat and reuses projects case-insensitively", async () => {
+    const { and, eq } = await import("drizzle-orm");
+    sent.length = 0;
+    const first = await post(TOKEN, {
+      body: "Deploy finished",
+      project: "Acme App",
+      summary: "Deploy digest",
+      bodyFormat: "markdown",
+    });
+    expect(first.status).toBe(200);
+    const firstJson = (await first.json()) as { eventId: string; message?: string };
+    expect(firstJson.message).toBeUndefined();
+
+    const [firstEvent] = await db
+      .select()
+      .from(schema.event)
+      .where(eq(schema.event.id, firstJson.eventId));
+    expect(firstEvent).toMatchObject({
+      summary: "Deploy digest",
+      bodyFormat: "markdown",
+      readAt: null,
+    });
+    expect(firstEvent?.projectId).toMatch(/^prj_/);
+
+    // NFC + case-insensitive identity: "acme APP" reuses the same project.
+    const second = await post(TOKEN, { body: "Second", project: "acme APP" });
+    const secondJson = (await second.json()) as { eventId: string };
+    const [secondEvent] = await db
+      .select()
+      .from(schema.event)
+      .where(eq(schema.event.id, secondJson.eventId));
+    expect(secondEvent?.projectId).toBe(firstEvent?.projectId);
+
+    const [projectRow] = await db
+      .select()
+      .from(schema.project)
+      .where(
+        and(eq(schema.project.userId, "user_1"), eq(schema.project.normalizedName, "acme app")),
+      );
+    // The display name keeps the first sender's casing.
+    expect(projectRow?.name).toBe("Acme App");
+
+    // The push carries the summary and the project metadata, never the raw body.
+    expect(sent[0]).toMatchObject({ body: "Deploy digest" });
+    expect(((sent[0]?.data ?? {}) as Record<string, unknown>).projectId).toBe(
+      firstEvent?.projectId,
+    );
+  });
+
+  it("keeps the replayed event's original project when the name is reused", async () => {
+    const { eq } = await import("drizzle-orm");
+    const first = await post(TOKEN, { body: "Replay", project: "Replay Project" }, "replay-prj");
+    const firstJson = (await first.json()) as { eventId: string };
+    const [firstEvent] = await db
+      .select()
+      .from(schema.event)
+      .where(eq(schema.event.id, firstJson.eventId));
+
+    const replay = await post(TOKEN, { body: "Replay", project: "Replay Project" }, "replay-prj");
+    const replayJson = (await replay.json()) as { eventId: string; idempotent?: boolean };
+    expect(replayJson.idempotent).toBe(true);
+    expect(replayJson.eventId).toBe(firstJson.eventId);
+    const [replayEvent] = await db
+      .select()
+      .from(schema.event)
+      .where(eq(schema.event.id, replayJson.eventId));
+    expect(replayEvent?.projectId).toBe(firstEvent?.projectId);
+  });
+
+  it("scopes projects to the token owner's account", async () => {
+    const { eq } = await import("drizzle-orm");
+    const now = new Date();
+    const otherToken = "whk_project-isolation-abcdefghijklmn";
+    await db.insert(schema.user).values({
+      id: "user_prj_other",
+      name: "Other",
+      email: "prj-other@example.com",
+      emailVerified: true,
+      createdAt: now,
+      updatedAt: now,
+    });
+    await db.insert(schema.service).values({
+      id: "svc_prj_other",
+      userId: "user_prj_other",
+      title: "Other service",
+      tokenHash: hashWebhookToken(otherToken),
+      createdAt: now,
+      updatedAt: now,
+    });
+
+    const response = await post(otherToken, { body: "Hi", project: "Acme App" });
+    expect(response.status).toBe(200);
+    const rows = await db
+      .select()
+      .from(schema.project)
+      .where(eq(schema.project.normalizedName, "acme app"));
+    expect(rows).toHaveLength(2);
+    expect(new Set(rows.map((row) => row.userId))).toEqual(new Set(["user_1", "user_prj_other"]));
+  });
+
+  it("degrades to Unfiled with a message instead of failing at the project cap", async () => {
+    const { eq } = await import("drizzle-orm");
+    const { MAX_PROJECTS_PER_ACCOUNT } = await import("@hark/contracts");
+    const now = new Date();
+    const existing = await db
+      .select({ id: schema.project.id })
+      .from(schema.project)
+      .where(eq(schema.project.userId, "user_1"));
+    const fillers = Array.from(
+      { length: MAX_PROJECTS_PER_ACCOUNT - existing.length },
+      (_, index) => ({
+        id: `prj_fill_${index}`,
+        userId: "user_1",
+        name: `Filler ${index}`,
+        normalizedName: `filler ${index}`,
+        createdAt: now,
+        updatedAt: now,
+      }),
+    );
+    await db.insert(schema.project).values(fillers);
+
+    const response = await post(TOKEN, { body: "Over cap", project: "Brand New Project" });
+    expect(response.status).toBe(200);
+    const json = (await response.json()) as { ok: boolean; eventId: string; message?: string };
+    expect(json.ok).toBe(true);
+    expect(json.message).toContain("Project limit reached");
+
+    const [row] = await db.select().from(schema.event).where(eq(schema.event.id, json.eventId));
+    expect(row?.projectId).toBeNull();
+
+    // An existing project still resolves at the cap.
+    const reuse = await post(TOKEN, { body: "Reuse", project: "ACME app" });
+    const reuseJson = (await reuse.json()) as { eventId: string; message?: string };
+    expect(reuseJson.message).toBeUndefined();
+    const [reuseRow] = await db
+      .select()
+      .from(schema.event)
+      .where(eq(schema.event.id, reuseJson.eventId));
+    expect(reuseRow?.projectId).toMatch(/^prj_/);
+
+    await db.delete(schema.project).where(eq(schema.project.name, "Filler 0"));
+  });
+
+  it("accepts an 8,000-character body and keeps the push below the APNs cap", async () => {
+    const { eq } = await import("drizzle-orm");
+    sent.length = 0;
+    const body = `head ${"気配り🚀 ".repeat(1_100)}tail`.slice(0, 8_000);
+    const response = await post(TOKEN, { body });
+    expect(response.status).toBe(200);
+    const json = (await response.json()) as { eventId: string };
+
+    const [row] = await db
+      .select({ body: schema.event.body })
+      .from(schema.event)
+      .where(eq(schema.event.id, json.eventId));
+    expect(row?.body).toBe(body);
+
+    expect(sent).toHaveLength(1);
+    expect(Buffer.byteLength(JSON.stringify(sent[0]), "utf8")).toBeLessThanOrEqual(4_096);
+    expect(String(sent[0]?.body).endsWith("…")).toBe(true);
+  });
+
+  it("rejects a body over the UTF-8 byte cap with a validation error", async () => {
+    const response = await post(TOKEN, { body: "気".repeat(6_000) });
+    expect(response.status).toBe(400);
+    expect(await response.json()).toMatchObject({ ok: false, error: "Invalid payload" });
   });
 });

@@ -7,25 +7,8 @@ import type {
 import { type DocAnchorId, type DocSectionId, docLabel } from "../../../shared/docs/nav";
 import { Inlines } from "./inlines";
 
-/** Marks a capability that is only available on a paid Hark Pro plan. */
-export function ProBadge() {
-  return (
-    <span className="inline-flex items-center rounded-full bg-accent-soft px-2 py-0.5 text-[0.6875rem] font-semibold tracking-wide text-accent-text uppercase">
-      Hark Pro
-    </span>
-  );
-}
-
 /** A top-level docs chapter. Its heading text comes from the sidebar nav. */
-export function DocSection({
-  id,
-  pro,
-  children,
-}: {
-  id: DocSectionId;
-  pro?: boolean;
-  children: React.ReactNode;
-}) {
+export function DocSection({ id, children }: { id: DocSectionId; children: React.ReactNode }) {
   return (
     <section aria-labelledby={`${id}-heading`} id={id}>
       <h2
@@ -34,36 +17,18 @@ export function DocSection({
       >
         {docLabel(id)}
       </h2>
-      {pro ? (
-        <p className="mt-3">
-          <ProBadge />
-        </p>
-      ) : null}
       {children}
     </section>
   );
 }
 
 /** A nested, individually linkable subsection. */
-export function DocSub({
-  id,
-  pro,
-  children,
-}: {
-  id: DocAnchorId;
-  pro?: boolean;
-  children: React.ReactNode;
-}) {
+export function DocSub({ id, children }: { id: DocAnchorId; children: React.ReactNode }) {
   return (
     <section aria-labelledby={`${id}-heading`} className="mt-10" id={id}>
       <h3 className="text-base font-semibold" id={`${id}-heading`}>
         {docLabel(id)}
       </h3>
-      {pro ? (
-        <p className="mt-2">
-          <ProBadge />
-        </p>
-      ) : null}
       <div className="mt-3 space-y-4">{children}</div>
     </section>
   );
@@ -293,12 +258,6 @@ function LaPreviewCard({ name }: { name: string }) {
           <div className="flex flex-col gap-0.5 px-4 pt-3 pb-2.5">
             <span className="flex items-center gap-2">
               <LaGear size={13} />
-              <span
-                className="text-[10px] font-semibold tracking-wider uppercase"
-                style={{ color: LA.secondary }}
-              >
-                Deploy #184
-              </span>
               <span className="flex-1" />
               <span className="text-xs font-semibold" style={{ color: LA.accent }}>
                 65%

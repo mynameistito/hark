@@ -55,7 +55,10 @@ export const activityFeedRoute = new Hono<AuthedEnv>().use("*", requireAuth).get
         s.title as source_name,
         coalesce(e.image_url, s.image_url) as source_image_url,
         e.title as title,
-        e.body as detail,
+        -- Bounded for app builds that predate the project inbox: bodies at or
+        -- under the legacy 2,000-character limit pass through unchanged, and
+        -- larger bodies fall back to the sender summary or a bounded preview.
+        coalesce(e.summary, substr(e.body, 1, 2000)) as detail,
         e.url as url,
         null as result,
         e.created_at as created_at
@@ -71,7 +74,7 @@ export const activityFeedRoute = new Hono<AuthedEnv>().use("*", requireAuth).get
         t.name as source_name,
         n.image_url as source_image_url,
         n.title as title,
-        n.body as detail,
+        coalesce(n.summary, substr(n.body, 1, 2000)) as detail,
         n.url as url,
         null as result,
         n.created_at as created_at

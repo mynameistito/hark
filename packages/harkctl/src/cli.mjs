@@ -77,6 +77,33 @@ function parseActionLabel(value, flag) {
   return label;
 }
 
+/** Server limits for notification bodies: 8,000 characters and 16 KiB of UTF-8. */
+const BODY_MAX_CHARS = 8000;
+const BODY_MAX_BYTES = 16384;
+
+function assertNotificationBody(value) {
+  const body = String(value).trim();
+  if (body.length === 0) throw new UsageError("notify requires a message body");
+  if (body.length > BODY_MAX_CHARS || Buffer.byteLength(body, "utf8") > BODY_MAX_BYTES) {
+    throw new UsageError(
+      `notify body must be at most ${BODY_MAX_CHARS} characters and ${BODY_MAX_BYTES} bytes of UTF-8`,
+    );
+  }
+  return String(value);
+}
+
+function resolveBodyFormat(options) {
+  const explicit = options["body-format"];
+  if (explicit !== undefined && explicit !== "text" && explicit !== "markdown") {
+    throw new UsageError("--body-format must be text or markdown");
+  }
+  if (options.markdown && explicit === "text") {
+    throw new UsageError("--markdown conflicts with --body-format text");
+  }
+  if (options.markdown) return "markdown";
+  return explicit;
+}
+
 export function parseArgs(argv) {
   const positionals = [];
   const options = { device: [], scope: [] };
@@ -106,6 +133,9 @@ export function parseArgs(argv) {
     "limit",
     "primary-label",
     "secondary-label",
+    "project",
+    "summary",
+    "body-format",
   ]);
   const booleanFlags = new Set([
     "approval",
@@ -120,6 +150,7 @@ export function parseArgs(argv) {
     "open",
     "no-open",
     "live-activity",
+    "markdown",
   ]);
   for (let index = 0; index < argv.length; index += 1) {
     const argument = argv[index];
@@ -395,6 +426,7 @@ function help() {
   harkctl auth logout
   harkctl auth status
   harkctl notify <body> [--title <name>] [--image <url>] [--url <url>] [--device <id>]
+                 [--project <name>] [--summary <text>] [--markdown | --body-format <text|markdown>]
                  [--idempotency-key <key>] [--stdin]
   harkctl notify ask <prompt> (--approval|--yes-no|--text) [--title <name>] [--image <url>]
                   [--url <url>] [--device <id>] [--expires-in <duration>]
@@ -433,6 +465,11 @@ literal body "ask". --wait blocks until the answer or timeout; --poll waits at m
 ${POLL_TIMEOUT_SECONDS} seconds to catch an instant answer. A timed-out poll or wait does
 not end the prompt: it stays answerable on the phone until it expires, and
 harkctl interaction wait <id> resumes waiting at any time.
+
+notify bodies can hold up to 8,000 characters (16 KiB of UTF-8). --project files the
+notification into a named project in the Hark app inbox, --summary sets the short
+push/preview text for a long body, and --markdown (or --body-format markdown) records
+how the body should eventually render. Project names are case-insensitive per account.
 
 Authentication: run harkctl auth login, or set HARK_TOKEN for an advanced manual setup.
 Tokens are never accepted as command arguments.`;
@@ -683,6 +720,11 @@ export async function execute(argv, env = process.env, overrides = {}) {
       if (options.timeout !== undefined && !options.wait) {
         throw new UsageError("--timeout requires --wait");
       }
+      if (options.project || options.summary || options.markdown || options["body-format"]) {
+        throw new UsageError(
+          "--project, --summary, --markdown, and --body-format apply to notify, not notify ask",
+        );
+      }
       const stdin = options.stdin ? await readStdinJson() : {};
       const prompt = positionals.slice(2).join(" ") || stdin.prompt;
       if (!prompt) throw new UsageError("notify ask requires a prompt");
@@ -739,6 +781,8 @@ export async function execute(argv, env = process.env, overrides = {}) {
     const stdin = options.stdin ? await readStdinJson() : {};
     const notificationBody = positionals.slice(1).join(" ") || stdin.body;
     if (!notificationBody) throw new UsageError("notify requires a message body");
+    assertNotificationBody(notificationBody);
+    const bodyFormat = resolveBodyFormat(options);
     const payload = {
       ...stdin,
       body: notificationBody,
@@ -746,6 +790,9 @@ export async function execute(argv, env = process.env, overrides = {}) {
       ...(options.image ? { imageUrl: options.image } : {}),
       ...(options.url ? { url: options.url } : {}),
       ...(options.device.length > 0 ? { deviceIds: options.device } : {}),
+      ...(options.project ? { project: options.project } : {}),
+      ...(options.summary ? { summary: options.summary } : {}),
+      ...(bodyFormat ? { bodyFormat } : {}),
     };
     const body = await request(config, "/api/agent/notifications", {
       method: "POST",

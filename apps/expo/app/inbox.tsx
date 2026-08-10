@@ -3,10 +3,11 @@ import type {
   InboxActivityKind,
   InboxInteractionDto,
   InboxLiveActivityDto,
+  InboxProjectSummaryDto,
 } from "@hark/contracts";
 import * as Device from "expo-device";
 import * as Notifications from "expo-notifications";
-import { Redirect, useRouter } from "expo-router";
+import { Redirect, useFocusEffect, useRouter } from "expo-router";
 import * as SecureStore from "expo-secure-store";
 import { StatusBar } from "expo-status-bar";
 import { SymbolView } from "expo-symbols";
@@ -27,9 +28,15 @@ import {
   View,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
-import { api } from "../src/lib/api";
+import { ApiError, api } from "../src/lib/api";
 import { useSession } from "../src/lib/auth";
-import { previewActive, previewActivity, previewPending } from "../src/lib/inbox-preview";
+import {
+  previewActive,
+  previewActivity,
+  previewPending,
+  previewProjects,
+} from "../src/lib/inbox-preview";
+import { createFocusRefreshPolicy, createRefreshSequence } from "../src/lib/inbox-refresh";
 import { DEVICE_ID_KEY, submitInteractionResponse } from "../src/lib/interactions";
 import { colors, fonts, tightTracking } from "../src/lib/theme";
 
@@ -49,10 +56,14 @@ export default function InboxScreen() {
   const [deviceId, setDeviceId] = useState<string | undefined>();
   const [pending, setPending] = useState<InboxInteractionDto[]>([]);
   const [active, setActive] = useState<InboxLiveActivityDto[]>([]);
+  const [projects, setProjects] = useState<InboxProjectSummaryDto[]>([]);
+  // Older/self-hosted servers without /api/inbox keep the legacy behavior.
+  const projectInboxSupported = useRef(true);
   const [activity, setActivity] = useState<InboxActivityDto[]>([]);
   const [activityTotal, setActivityTotal] = useState(0);
   const [activityFilter, setActivityFilter] = useState<ActivityFilter>("all");
   const [activityPage, setActivityPage] = useState(0);
+  const [historyOpen, setHistoryOpen] = useState(false);
   const [replyingTo, setReplyingTo] = useState<string | null>(null);
   const [reply, setReply] = useState("");
   const [respondingTo, setRespondingTo] = useState<string | null>(null);
@@ -60,6 +71,9 @@ export default function InboxScreen() {
   const [refreshing, setRefreshing] = useState(false);
   const [loadError, setLoadError] = useState(false);
   const simulatorPreview = __DEV__ && !Device.isDevice;
+  // Orders overlapping refreshes (timer, focus, push, pull-to-refresh) so a
+  // slow stale response never overwrites fresher state or the badge.
+  const refreshSequence = useRef(createRefreshSequence()).current;
 
   useEffect(() => {
     void SecureStore.getItemAsync(DEVICE_ID_KEY).then((value) =>
@@ -67,52 +81,83 @@ export default function InboxScreen() {
     );
   }, [simulatorPreview]);
 
-  const refreshSummary = useCallback(async () => {
-    if (simulatorPreview) {
-      if (!previewLoaded.current) {
-        previewLoaded.current = true;
-        setPending(previewPending);
+  const refreshSummary = useCallback(
+    async (token: number) => {
+      if (simulatorPreview) {
+        if (!previewLoaded.current) {
+          previewLoaded.current = true;
+          setPending(previewPending);
+        }
+        setActive(previewActive);
+        setProjects(previewProjects.projects);
+        return;
       }
-      setActive(previewActive);
-      return;
-    }
-    const [interactionResult, activityResult] = await Promise.all([
-      api.listPendingInteractions(),
-      api.listActiveActivities(),
-    ]);
-    setPending(interactionResult.interactions);
-    setActive(activityResult.activities);
-    void Notifications.setBadgeCountAsync(interactionResult.interactions.length).catch(() => {});
-  }, [simulatorPreview]);
+      const [interactionResult, activityResult, projectResult] = await Promise.all([
+        api.listPendingInteractions(),
+        api.listActiveActivities(),
+        projectInboxSupported.current
+          ? api.listInboxProjects().catch((error: unknown) => {
+              if (error instanceof ApiError && error.status === 404) {
+                // The latch records a fact about the server, so it applies
+                // even when a newer refresh supersedes this one.
+                projectInboxSupported.current = false;
+                return null;
+              }
+              throw error;
+            })
+          : Promise.resolve(null),
+      ]);
+      if (!refreshSequence.isCurrent(token)) return;
+      setPending(interactionResult.interactions);
+      setActive(activityResult.activities);
+      if (projectResult) setProjects(projectResult.projects);
+      else if (!projectInboxSupported.current) setProjects([]);
+      // Badge counts pending interactions plus unread notifications; the
+      // server never sends badge values itself.
+      const totalUnread = projectResult?.totalUnread ?? 0;
+      void Notifications.setBadgeCountAsync(
+        interactionResult.interactions.length + totalUnread,
+      ).catch(() => {});
+    },
+    [refreshSequence, simulatorPreview],
+  );
 
-  const refreshActivity = useCallback(async () => {
-    if (simulatorPreview) {
-      const filtered =
-        activityFilter === "all"
-          ? previewActivity
-          : previewActivity.filter((item) => item.kind === activityFilter);
-      setActivity(
-        filtered.slice(activityPage * ACTIVITY_PAGE_SIZE, (activityPage + 1) * ACTIVITY_PAGE_SIZE),
-      );
-      setActivityTotal(filtered.length);
-      return;
-    }
-    const result = await api.listActivityFeed(activityFilter, activityPage);
-    if (result.items.length === 0 && activityPage > 0) {
-      setActivityPage(activityPage - 1);
-      return;
-    }
-    setActivity(result.items);
-    setActivityTotal(result.total);
-    setLoadError(false);
-  }, [activityFilter, activityPage, simulatorPreview]);
+  const refreshActivity = useCallback(
+    async (token: number) => {
+      if (simulatorPreview) {
+        const filtered =
+          activityFilter === "all"
+            ? previewActivity
+            : previewActivity.filter((item) => item.kind === activityFilter);
+        setActivity(
+          filtered.slice(
+            activityPage * ACTIVITY_PAGE_SIZE,
+            (activityPage + 1) * ACTIVITY_PAGE_SIZE,
+          ),
+        );
+        setActivityTotal(filtered.length);
+        return;
+      }
+      const result = await api.listActivityFeed(activityFilter, activityPage);
+      if (!refreshSequence.isCurrent(token)) return;
+      if (result.items.length === 0 && activityPage > 0) {
+        setActivityPage(activityPage - 1);
+        return;
+      }
+      setActivity(result.items);
+      setActivityTotal(result.total);
+      setLoadError(false);
+    },
+    [activityFilter, activityPage, refreshSequence, simulatorPreview],
+  );
 
   const refreshAll = useCallback(async () => {
-    await Promise.all([refreshSummary(), refreshActivity()]);
-  }, [refreshActivity, refreshSummary]);
+    const token = refreshSequence.begin();
+    await Promise.all([refreshSummary(token), refreshActivity(token)]);
+  }, [refreshActivity, refreshSequence, refreshSummary]);
 
   useEffect(() => {
-    if (!session || !deviceId) return;
+    if ((!session && !simulatorPreview) || !deviceId) return;
     setLoading(true);
     void refreshAll()
       .catch(() => setLoadError(true))
@@ -129,7 +174,31 @@ export default function InboxScreen() {
       notificationSubscription.remove();
       appStateSubscription.remove();
     };
-  }, [deviceId, refreshAll, session]);
+  }, [deviceId, refreshAll, session, simulatorPreview]);
+
+  // Refresh immediately when the screen regains navigation focus — returning
+  // from the project or notification screens, where read state changes —
+  // instead of waiting up to 15 seconds for the timer to correct the project
+  // unread counts and the app badge. The callback stays stable (state is read
+  // through refs) so the effect fires only on real focus transitions, and the
+  // policy skips the mount focus because the initial-load effect owns it.
+  const focusRefreshPolicy = useRef(createFocusRefreshPolicy()).current;
+  const refreshAllRef = useRef(refreshAll);
+  useEffect(() => {
+    refreshAllRef.current = refreshAll;
+  }, [refreshAll]);
+  const focusReadyRef = useRef(false);
+  useEffect(() => {
+    focusReadyRef.current = Boolean((session || simulatorPreview) && deviceId);
+  }, [deviceId, session, simulatorPreview]);
+  useFocusEffect(
+    useCallback(() => {
+      if (focusRefreshPolicy.onFocus(focusReadyRef.current)) {
+        void refreshAllRef.current().catch(() => {});
+      }
+      return () => focusRefreshPolicy.onBlur();
+    }, [focusRefreshPolicy]),
+  );
 
   const onRefresh = async () => {
     setRefreshing(true);
@@ -185,8 +254,9 @@ export default function InboxScreen() {
   };
 
   const activityPageCount = Math.max(1, Math.ceil(activityTotal / ACTIVITY_PAGE_SIZE));
+  const projectGroups = buildProjectGroups(projects, pending, active);
 
-  if (!sessionPending && !session) return <Redirect href="/" />;
+  if (!sessionPending && !session && !simulatorPreview) return <Redirect href="/" />;
   if (deviceId === "") return <Redirect href="/home" />;
 
   return (
@@ -229,9 +299,40 @@ export default function InboxScreen() {
             </Pressable>
           </View>
 
-          {pending.length > 0 ? (
+          {projectGroups.length > 0 ? (
+            <View style={styles.projectSection}>
+              {projectGroups.map((group) => (
+                <ProjectGroup
+                  active={group.active}
+                  item={group.project}
+                  key={group.project.projectId ?? "unfiled"}
+                  onCancelReply={() => {
+                    setReplyingTo(null);
+                    setReply("");
+                  }}
+                  onOpen={() =>
+                    router.push({
+                      pathname: "/project/[project]",
+                      params: {
+                        project: group.project.projectId ?? "unfiled",
+                        name: group.project.name,
+                      },
+                    })
+                  }
+                  onReplyChange={setReply}
+                  onResolve={(interaction, action, response) =>
+                    void resolveItem(interaction, action, response)
+                  }
+                  onStartReply={(id) => setReplyingTo(id)}
+                  pending={group.pending}
+                  reply={reply}
+                  replyingTo={replyingTo}
+                  respondingTo={respondingTo}
+                />
+              ))}
+            </View>
+          ) : (
             <>
-              <SectionHeading title="Needs your response" count={pending.length} first />
               {pending.map((item, index) => (
                 <PendingRow
                   item={item}
@@ -249,52 +350,123 @@ export default function InboxScreen() {
                   responding={respondingTo === item.id}
                 />
               ))}
-            </>
-          ) : null}
-
-          {active.length > 0 ? (
-            <>
-              <SectionHeading title="Active now" first={pending.length === 0} />
               {active.map((item, index) => (
                 <ActiveRow item={item} key={item.id} first={index === 0} />
               ))}
             </>
-          ) : null}
+          )}
 
-          <View onLayout={(event) => (activityOffset.current = event.nativeEvent.layout.y)}>
-            <SectionHeading title="Activity" first={pending.length === 0 && active.length === 0} />
-            <ActivityPicker
-              value={activityFilter}
-              onChange={(value) => {
-                setActivityFilter(value);
-                setActivityPage(0);
-              }}
+          <Pressable
+            accessibilityRole="button"
+            accessibilityState={{ expanded: historyOpen }}
+            onPress={() => setHistoryOpen((open) => !open)}
+            style={({ pressed }) => [styles.historyRow, pressed && styles.projectRowPressed]}
+          >
+            <Text style={styles.historyText}>History</Text>
+            <SymbolView
+              name={historyOpen ? "chevron.up" : "chevron.right"}
+              size={11}
+              tintColor={colors.soft}
+              weight="semibold"
             />
-            {loading ? <ActivityIndicator color={colors.accent} style={styles.loading} /> : null}
-            {!loading && activity.length === 0 ? (
-              <Text style={styles.emptyActivity}>
-                {loadError ? "Couldn’t load activity. Pull to refresh." : "No activity yet."}
-              </Text>
-            ) : null}
-            {activity.map((item, index) => (
-              <ActivityRow item={item} key={`${item.kind}-${item.id}`} first={index === 0} />
-            ))}
-            {activityPageCount > 1 ? (
-              <Pagination
-                page={activityPage}
-                pageCount={activityPageCount}
-                total={activityTotal}
-                onPageChange={(page) => {
-                  setActivityPage(page);
-                  scrollRef.current?.scrollTo({ y: activityOffset.current, animated: true });
+          </Pressable>
+
+          {historyOpen ? (
+            <View onLayout={(event) => (activityOffset.current = event.nativeEvent.layout.y)}>
+              <ActivityPicker
+                value={activityFilter}
+                onChange={(value) => {
+                  setActivityFilter(value);
+                  setActivityPage(0);
                 }}
               />
-            ) : null}
-          </View>
+              {loading ? <ActivityIndicator color={colors.accent} style={styles.loading} /> : null}
+              {!loading && activity.length === 0 ? (
+                <Text style={styles.emptyActivity}>
+                  {loadError ? "Couldn’t load activity. Pull to refresh." : "No activity yet."}
+                </Text>
+              ) : null}
+              {activity.map((item, index) => (
+                <ActivityRow item={item} key={`${item.kind}-${item.id}`} first={index === 0} />
+              ))}
+              {activityPageCount > 1 ? (
+                <Pagination
+                  page={activityPage}
+                  pageCount={activityPageCount}
+                  total={activityTotal}
+                  onPageChange={(page) => {
+                    setActivityPage(page);
+                    scrollRef.current?.scrollTo({ y: activityOffset.current, animated: true });
+                  }}
+                />
+              ) : null}
+            </View>
+          ) : null}
         </ScrollView>
       </KeyboardAvoidingView>
     </SafeAreaView>
   );
+}
+
+interface ProjectGroupData {
+  project: InboxProjectSummaryDto;
+  pending: InboxInteractionDto[];
+  active: InboxLiveActivityDto[];
+}
+
+function buildProjectGroups(
+  projects: InboxProjectSummaryDto[],
+  pending: InboxInteractionDto[],
+  active: InboxLiveActivityDto[],
+): ProjectGroupData[] {
+  if (projects.length === 0) return [];
+
+  const projectIds = new Set(projects.map((project) => project.projectId));
+  const projectByName = new Map(projects.map((project) => [project.name.toLowerCase(), project]));
+  const keyFor = (item: { projectId?: string | null; sourceName: string }): string | null => {
+    if (item.projectId !== undefined && projectIds.has(item.projectId)) return item.projectId;
+    const named = projectByName.get(item.sourceName.toLowerCase());
+    return named?.projectId ?? null;
+  };
+
+  const pendingByProject = new Map<string | null, InboxInteractionDto[]>();
+  const activeByProject = new Map<string | null, InboxLiveActivityDto[]>();
+  for (const item of pending) {
+    const key = keyFor(item);
+    pendingByProject.set(key, [...(pendingByProject.get(key) ?? []), item]);
+  }
+  for (const item of active) {
+    const key = keyFor(item);
+    activeByProject.set(key, [...(activeByProject.get(key) ?? []), item]);
+  }
+
+  const groups = projects.map((project) => ({
+    project,
+    pending: pendingByProject.get(project.projectId) ?? [],
+    active: activeByProject.get(project.projectId) ?? [],
+  }));
+
+  if (!projectIds.has(null) && (pendingByProject.has(null) || activeByProject.has(null))) {
+    const unfiledPending = pendingByProject.get(null) ?? [];
+    const unfiledActive = activeByProject.get(null) ?? [];
+    groups.push({
+      project: {
+        projectId: null,
+        name: "Other",
+        unreadCount: 0,
+        totalCount: 0,
+        latestTitle: null,
+        latestPreview: null,
+        latestImageUrl:
+          unfiledPending[0]?.sourceImageUrl ?? unfiledActive[0]?.sourceImageUrl ?? null,
+        latestAt: null,
+      },
+      pending: unfiledPending,
+      active: unfiledActive,
+    });
+  }
+
+  return groups;
 }
 
 function ActivityPicker({
@@ -384,23 +556,6 @@ function Pagination({
       >
         <SymbolView name="chevron.right" size={14} tintColor={colors.ink} weight="semibold" />
       </Pressable>
-    </View>
-  );
-}
-
-function SectionHeading({
-  title,
-  count,
-  first,
-}: {
-  title: string;
-  count?: number;
-  first?: boolean;
-}) {
-  return (
-    <View style={[styles.sectionHeading, first && styles.firstSectionHeading]}>
-      <Text style={styles.sectionTitle}>{title}</Text>
-      {count !== undefined && count > 0 ? <Text style={styles.sectionCount}>{count}</Text> : null}
     </View>
   );
 }
@@ -521,6 +676,261 @@ function PendingRow({
   );
 }
 
+function ProjectGroup({
+  item,
+  pending,
+  active,
+  reply,
+  replyingTo,
+  respondingTo,
+  onOpen,
+  onReplyChange,
+  onStartReply,
+  onCancelReply,
+  onResolve,
+}: {
+  item: InboxProjectSummaryDto;
+  pending: InboxInteractionDto[];
+  active: InboxLiveActivityDto[];
+  reply: string;
+  replyingTo: string | null;
+  respondingTo: string | null;
+  onOpen: () => void;
+  onReplyChange: (value: string) => void;
+  onStartReply: (id: string) => void;
+  onCancelReply: () => void;
+  onResolve: (
+    item: InboxInteractionDto,
+    action: "approve" | "deny" | "yes" | "no" | "reply",
+    response?: string,
+  ) => void;
+}) {
+  const hasLiveContent = pending.length > 0 || active.length > 0;
+  return (
+    <View style={styles.projectGroup}>
+      <ProjectRow item={item} onPress={onOpen} showPreview={!hasLiveContent} />
+      {pending.map((interaction) => (
+        <ProjectInteraction
+          item={interaction}
+          key={interaction.id}
+          onCancelReply={onCancelReply}
+          onReplyChange={onReplyChange}
+          onResolve={(action, response) => onResolve(interaction, action, response)}
+          onStartReply={() => onStartReply(interaction.id)}
+          reply={reply}
+          replying={replyingTo === interaction.id}
+          responding={respondingTo === interaction.id}
+        />
+      ))}
+      {active.map((activity) => (
+        <ProjectActivity item={activity} key={activity.id} />
+      ))}
+    </View>
+  );
+}
+
+function ProjectInteraction({
+  item,
+  replying,
+  reply,
+  responding,
+  onReplyChange,
+  onStartReply,
+  onCancelReply,
+  onResolve,
+}: {
+  item: InboxInteractionDto;
+  replying: boolean;
+  reply: string;
+  responding: boolean;
+  onReplyChange: (value: string) => void;
+  onStartReply: () => void;
+  onCancelReply: () => void;
+  onResolve: (action: "approve" | "deny" | "yes" | "no" | "reply", response?: string) => void;
+}) {
+  const actionButtons =
+    item.kind === "approval" ? (
+      <View style={styles.projectActionButtons}>
+        <ActionButton
+          compact
+          disabled={responding}
+          label={item.secondaryLabel ?? "Deny"}
+          onPress={() => onResolve("deny")}
+          secondary
+        />
+        <ActionButton
+          compact
+          disabled={responding}
+          label={responding ? "Sending…" : (item.primaryLabel ?? "Approve")}
+          onPress={() => onResolve("approve")}
+        />
+      </View>
+    ) : item.kind === "yes_no" ? (
+      <View style={styles.projectActionButtons}>
+        <ActionButton
+          compact
+          disabled={responding}
+          label={item.secondaryLabel ?? "No"}
+          onPress={() => onResolve("no")}
+          secondary
+        />
+        <ActionButton
+          compact
+          disabled={responding}
+          label={responding ? "Sending…" : (item.primaryLabel ?? "Yes")}
+          onPress={() => onResolve("yes")}
+        />
+      </View>
+    ) : (
+      <Pressable
+        accessibilityRole="button"
+        disabled={responding}
+        hitSlop={{ top: 5, bottom: 5 }}
+        onPress={onStartReply}
+        style={({ pressed }) => [
+          styles.compactReplyButton,
+          pressed && styles.secondaryButtonPressed,
+        ]}
+      >
+        <SymbolView name="arrow.turn.down.left" size={14} tintColor={colors.accent} />
+        <Text style={styles.replyButtonText}>Reply</Text>
+      </Pressable>
+    );
+
+  return (
+    <View style={styles.projectChild}>
+      <Text style={styles.projectActionTitle}>{item.title}</Text>
+      <Text style={styles.projectActionPrompt}>{item.prompt}</Text>
+      {replying && item.kind === "reply" ? (
+        <View style={styles.projectReplyArea}>
+          <TextInput
+            autoFocus
+            multiline
+            onChangeText={onReplyChange}
+            placeholder="Write a response"
+            placeholderTextColor={colors.soft}
+            style={styles.replyInput}
+            value={reply}
+          />
+          <View style={styles.replyFooter}>
+            <Pressable
+              accessibilityRole="button"
+              hitSlop={8}
+              onPress={onCancelReply}
+              style={({ pressed }) => pressed && styles.textButtonPressed}
+            >
+              <Text style={styles.cancelText}>Cancel</Text>
+            </Pressable>
+            <Pressable
+              accessibilityRole="button"
+              disabled={!reply.trim() || responding}
+              onPress={() => onResolve("reply", reply)}
+              style={({ pressed }) => [
+                styles.sendButton,
+                (!reply.trim() || responding) && styles.sendButtonDisabled,
+                pressed && reply.trim() && !responding && styles.buttonPressed,
+              ]}
+            >
+              <SymbolView name="arrow.up" size={15} tintColor="#FFFFFF" weight="semibold" />
+            </Pressable>
+          </View>
+        </View>
+      ) : (
+        <View style={styles.projectActionFooter}>
+          <View style={styles.projectActionMeta}>
+            <SymbolView name="clock" size={11} tintColor={colors.muted} />
+            <Text numberOfLines={1} style={styles.projectActionMetaText}>
+              {timeRemaining(item.expiresAt)} · {item.sourceName}
+            </Text>
+          </View>
+          {actionButtons}
+        </View>
+      )}
+    </View>
+  );
+}
+
+function ProjectActivity({ item }: { item: InboxLiveActivityDto }) {
+  const progress = item.props.progress;
+  return (
+    <View style={styles.projectChild}>
+      <View style={styles.rowTopLine}>
+        <Text style={styles.projectActionTitle}>{item.props.title}</Text>
+        {progress !== undefined ? (
+          <Text style={styles.activePercent}>{Math.round(progress * 100)}%</Text>
+        ) : null}
+      </View>
+      <Text style={styles.projectActionPrompt}>{item.props.detail ?? item.props.status}</Text>
+      {progress !== undefined ? (
+        <View style={styles.progressTrack}>
+          <View style={[styles.progressFill, { width: `${Math.round(progress * 100)}%` }]} />
+        </View>
+      ) : null}
+    </View>
+  );
+}
+
+function ProjectRow({
+  item,
+  onPress,
+  showPreview,
+}: {
+  item: InboxProjectSummaryDto;
+  onPress: () => void;
+  showPreview: boolean;
+}) {
+  return (
+    <Pressable
+      accessibilityRole="button"
+      accessibilityLabel={`${item.name}, ${item.unreadCount} unread`}
+      onPress={onPress}
+      style={({ pressed }) => [styles.projectRow, pressed && styles.projectRowPressed]}
+    >
+      <ProjectThumbnail name={item.name} url={item.latestImageUrl} />
+      <View style={styles.projectCopy}>
+        <View style={styles.rowTopLine}>
+          <Text numberOfLines={1} style={styles.projectName}>
+            {item.name}
+          </Text>
+          {item.latestAt ? (
+            <Text style={styles.itemTime}>{relativeTime(item.latestAt)}</Text>
+          ) : null}
+        </View>
+        {showPreview ? (
+          <Text numberOfLines={1} style={styles.projectPreview}>
+            {item.latestPreview ?? "No notifications yet"}
+          </Text>
+        ) : null}
+      </View>
+      {item.unreadCount > 0 ? (
+        <View style={styles.unreadBadge}>
+          <Text style={styles.unreadBadgeText}>
+            {item.unreadCount > 99 ? "99+" : item.unreadCount}
+          </Text>
+        </View>
+      ) : null}
+      <SymbolView name="chevron.right" size={11} tintColor={colors.soft} weight="semibold" />
+    </Pressable>
+  );
+}
+
+function ProjectThumbnail({ name, url }: { name: string; url?: string | null }) {
+  if (url) {
+    return (
+      <Image
+        accessibilityIgnoresInvertColors
+        source={{ uri: url }}
+        style={styles.projectThumbnail}
+      />
+    );
+  }
+  return (
+    <View style={[styles.projectThumbnail, styles.projectThumbnailFallback]}>
+      <Text style={styles.projectThumbnailText}>{name.slice(0, 1).toUpperCase()}</Text>
+    </View>
+  );
+}
+
 function ActiveRow({ item, first }: { item: InboxLiveActivityDto; first: boolean }) {
   const progress = item.props.progress;
   return (
@@ -604,19 +1014,23 @@ function ActionButton({
   onPress,
   secondary,
   disabled,
+  compact,
 }: {
   label: string;
   onPress: () => void;
   secondary?: boolean;
   disabled?: boolean;
+  compact?: boolean;
 }) {
   return (
     <Pressable
       accessibilityRole="button"
       disabled={disabled}
+      hitSlop={compact ? { top: 5, bottom: 5 } : undefined}
       onPress={onPress}
       style={({ pressed }) => [
         styles.actionButton,
+        compact && styles.compactActionButton,
         secondary && styles.secondaryAction,
         disabled && styles.sendButtonDisabled,
         pressed && (secondary ? styles.secondaryButtonPressed : styles.buttonPressed),
@@ -702,28 +1116,6 @@ const styles = StyleSheet.create({
     width: 20,
     height: 20,
   },
-  sectionHeading: {
-    minHeight: 33,
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 7,
-    marginTop: 17,
-  },
-  firstSectionHeading: {
-    marginTop: 26,
-  },
-  sectionTitle: {
-    color: colors.muted,
-    fontFamily: fonts.semibold,
-    fontSize: 12,
-    letterSpacing: 0.55,
-    textTransform: "uppercase",
-  },
-  sectionCount: {
-    color: colors.soft,
-    fontFamily: fonts.medium,
-    fontSize: 11,
-  },
   activityPicker: {
     gap: 6,
     paddingVertical: 8,
@@ -802,6 +1194,163 @@ const styles = StyleSheet.create({
   firstRow: {
     borderTopWidth: StyleSheet.hairlineWidth,
     borderTopColor: colors.line,
+  },
+  projectSection: {
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: "#D8D6CE",
+  },
+  projectGroup: {
+    paddingBottom: 16,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: "#D8D6CE",
+  },
+  projectRow: {
+    minHeight: 64,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 12,
+    paddingVertical: 10,
+  },
+  projectRowPressed: {
+    opacity: 0.7,
+  },
+  projectCopy: {
+    minWidth: 0,
+    flex: 1,
+  },
+  projectName: {
+    flexShrink: 1,
+    color: colors.ink,
+    fontFamily: fonts.semibold,
+    fontSize: 15,
+    lineHeight: 20,
+    letterSpacing: tightTracking(15),
+  },
+  projectPreview: {
+    marginTop: 2,
+    color: colors.muted,
+    fontFamily: fonts.regular,
+    fontSize: 13,
+    lineHeight: 18,
+    letterSpacing: tightTracking(13),
+  },
+  projectThumbnail: {
+    width: 40,
+    height: 40,
+    flexShrink: 0,
+    borderRadius: 11,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: "#0000001A",
+    backgroundColor: colors.line,
+  },
+  projectThumbnailFallback: {
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: colors.accentSoft,
+  },
+  projectThumbnailText: {
+    color: colors.accent,
+    fontFamily: fonts.semibold,
+    fontSize: 15,
+    letterSpacing: tightTracking(15),
+  },
+  projectChild: {
+    paddingTop: 5,
+    paddingBottom: 7,
+  },
+  projectActionTitle: {
+    flex: 1,
+    color: colors.ink,
+    fontFamily: fonts.semibold,
+    fontSize: 14,
+    lineHeight: 19,
+    letterSpacing: tightTracking(14),
+  },
+  projectActionPrompt: {
+    marginTop: 3,
+    color: colors.muted,
+    fontFamily: fonts.regular,
+    fontSize: 13,
+    lineHeight: 18,
+    letterSpacing: tightTracking(13),
+  },
+  projectActionFooter: {
+    minHeight: 44,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: 10,
+    marginTop: 8,
+  },
+  projectActionMeta: {
+    minWidth: 0,
+    flex: 1,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 5,
+  },
+  projectActionMetaText: {
+    flex: 1,
+    color: colors.muted,
+    fontFamily: fonts.regular,
+    fontSize: 11,
+    letterSpacing: tightTracking(11),
+  },
+  projectActionButtons: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+  },
+  compactActionButton: {
+    minWidth: 72,
+    minHeight: 34,
+    flex: 0,
+    paddingHorizontal: 14,
+    borderRadius: 17,
+  },
+  compactReplyButton: {
+    minHeight: 34,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 7,
+    paddingHorizontal: 16,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: "#D6D3CC",
+    borderRadius: 17,
+    backgroundColor: "#F2F1ED",
+  },
+  projectReplyArea: {
+    marginTop: 10,
+  },
+  unreadBadge: {
+    minWidth: 22,
+    height: 22,
+    alignItems: "center",
+    justifyContent: "center",
+    paddingHorizontal: 7,
+    borderRadius: 11,
+    backgroundColor: colors.accent,
+  },
+  unreadBadgeText: {
+    color: "#FFFFFF",
+    fontFamily: fonts.semibold,
+    fontSize: 12,
+    letterSpacing: tightTracking(12),
+  },
+  historyRow: {
+    minHeight: 54,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: colors.line,
+  },
+  historyText: {
+    color: colors.muted,
+    fontFamily: fonts.medium,
+    fontSize: 13,
+    letterSpacing: tightTracking(13),
   },
   pendingRow: {
     paddingVertical: 18,
@@ -886,8 +1435,8 @@ const styles = StyleSheet.create({
   },
   secondaryAction: {
     borderWidth: StyleSheet.hairlineWidth,
-    borderColor: colors.line,
-    backgroundColor: colors.surface,
+    borderColor: "#D6D3CC",
+    backgroundColor: "#F2F1ED",
   },
   actionLabel: {
     color: "#FFFFFF",

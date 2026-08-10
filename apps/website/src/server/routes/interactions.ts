@@ -32,6 +32,7 @@ import { checkNotificationAllowance, getBilling, trackNotification } from "../li
 import { newId } from "../lib/id";
 import { deliverInteractionCallbacks } from "../lib/interaction-callbacks";
 import { verifyLiveActivityInteractionCredential } from "../lib/live-activity-interaction";
+import { resolveProjectForDelivery } from "../lib/projects";
 import { buildInteractionPushMessages, buildPushMessages, sendPushMessages } from "../lib/push";
 import { hashInteractionResponseToken } from "../lib/token";
 import {
@@ -133,6 +134,10 @@ function toNotificationDto(row: NotificationRow): AgentNotificationDto {
     imageUrl: row.imageUrl,
     url: row.url,
     createdAt: row.createdAt.toISOString(),
+    // Additive metadata; older clients ignore unknown keys.
+    projectId: row.projectId,
+    summary: row.summary,
+    ...(row.bodyFormat === "markdown" ? { bodyFormat: "markdown" as const } : {}),
   };
 }
 
@@ -363,6 +368,13 @@ export const agentRoute = new Hono<AgentEnv>()
       return c.json({ error: "Monthly notification limit reached" }, 429);
     }
 
+    // Resolved after the idempotency replay checks above and before the
+    // insert below, so replays keep their originally stored project and a
+    // full account never fails the delivery.
+    const projectResolution = parsed.data.project
+      ? await resolveProjectForDelivery(token.userId, parsed.data.project)
+      : { projectId: null };
+
     const notificationId = newId("anot");
     const values: typeof agentNotification.$inferInsert = {
       id: notificationId,
@@ -375,6 +387,9 @@ export const agentRoute = new Hono<AgentEnv>()
       acceptedCount: 0,
       idempotencyKey: idempotencyKey ?? null,
       requestHash: idempotencyKey ? requestHash : null,
+      projectId: projectResolution.projectId,
+      bodyFormat: parsed.data.bodyFormat ?? null,
+      summary: parsed.data.summary ?? null,
       createdAt: new Date(),
     };
 
@@ -403,7 +418,12 @@ export const agentRoute = new Hono<AgentEnv>()
         {
           notification: toNotificationDto(outcome.row),
           accepted: 0,
-          message: "No active iOS devices are registered for this account.",
+          message: [
+            "No active iOS devices are registered for this account.",
+            projectResolution.message,
+          ]
+            .filter(Boolean)
+            .join(" "),
         },
         201,
       );
@@ -420,11 +440,13 @@ export const agentRoute = new Hono<AgentEnv>()
         .update(parsed.data.title.trim().toLowerCase())
         .digest("hex")
         .slice(0, 10)}`,
+      ...(projectResolution.projectId ? { projectId: projectResolution.projectId } : {}),
       resolved: {
         title: parsed.data.title,
         body: parsed.data.body,
         imageUrl: parsed.data.imageUrl,
         url: parsed.data.url,
+        ...(parsed.data.summary !== undefined ? { summary: parsed.data.summary } : {}),
       },
     });
     const result = await sendPushMessages(messages);
@@ -463,12 +485,16 @@ export const agentRoute = new Hono<AgentEnv>()
       .update(agentNotification)
       .set({ acceptedCount: result.accepted })
       .where(eq(agentNotification.id, notificationId));
+    const messageParts = [
+      // Provider errors can embed push tokens, so the reason is deliberately coarse.
+      ...(result.accepted === 0 ? ["No notifications were accepted by Expo."] : []),
+      ...(projectResolution.message ? [projectResolution.message] : []),
+    ];
     return c.json(
       {
         notification: toNotificationDto({ ...outcome.row, acceptedCount: result.accepted }),
         accepted: result.accepted,
-        // Provider errors can embed push tokens, so the reason is deliberately coarse.
-        ...(result.accepted === 0 ? { message: "No notifications were accepted by Expo." } : {}),
+        ...(messageParts.length > 0 ? { message: messageParts.join(" ") } : {}),
       },
       201,
     );
@@ -885,10 +911,12 @@ export const interactionResponseRoute = new Hono<AuthedEnv>()
         tokenName: apiToken.name,
         serviceName: service.title,
         serviceImageUrl: service.imageUrl,
+        projectId: event.projectId,
       })
       .from(interaction)
       .leftJoin(apiToken, eq(interaction.requesterTokenId, apiToken.id))
       .leftJoin(service, eq(interaction.requesterServiceId, service.id))
+      .leftJoin(event, eq(interaction.eventId, event.id))
       .where(
         and(
           eq(interaction.userId, c.get("user").id),
@@ -899,10 +927,11 @@ export const interactionResponseRoute = new Hono<AuthedEnv>()
       .orderBy(desc(interaction.createdAt))
       .limit(50);
     const interactions: InboxInteractionDto[] = rows.map(
-      ({ row, tokenName, serviceName, serviceImageUrl }) => ({
+      ({ row, tokenName, serviceName, serviceImageUrl, projectId }) => ({
         ...toDto(row),
         sourceName: serviceName ?? tokenName ?? row.title,
         sourceImageUrl: row.imageUrl ?? serviceImageUrl,
+        projectId,
       }),
     );
     return c.json({ interactions });

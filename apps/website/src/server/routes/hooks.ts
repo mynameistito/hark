@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { type WebhookResponse, webhookRequestSchema } from "@hark/contracts";
-import { and, count, desc, eq, gte, inArray } from "drizzle-orm";
+import { and, count, desc, eq, gte, inArray, isNull } from "drizzle-orm";
 import { Hono } from "hono";
 import { db } from "../db";
 import {
@@ -15,6 +15,7 @@ import {
 import { failureBucket, track } from "../lib/analytics";
 import { checkNotificationAllowance, getBilling, trackNotification } from "../lib/billing";
 import { newId } from "../lib/id";
+import { resolveProjectForDelivery } from "../lib/projects";
 import {
   buildInteractionPushMessages,
   buildNotificationWithdrawalPushMessages,
@@ -229,6 +230,13 @@ export const hooksRoute = new Hono()
       );
     }
 
+    // Resolved after the idempotency replay checks above and before the
+    // insert below, so replays keep their originally stored project and a
+    // full account never fails the delivery.
+    const projectResolution = parsed.data.project
+      ? await resolveProjectForDelivery(svc.userId, parsed.data.project)
+      : { projectId: null };
+
     const resolved = resolveNotification(svc, parsed.data);
     const eventId = newId("evt");
     const eventValues: typeof event.$inferInsert = {
@@ -243,6 +251,9 @@ export const hooksRoute = new Hono()
       error: null,
       idempotencyKey: idempotencyKey ?? null,
       requestHash: idempotencyKey ? requestHash : null,
+      projectId: projectResolution.projectId,
+      bodyFormat: parsed.data.bodyFormat ?? null,
+      summary: parsed.data.summary ?? null,
       createdAt: new Date(),
     };
 
@@ -350,7 +361,12 @@ export const hooksRoute = new Hono()
               },
             }
           : {}),
-        message: "No active iOS devices are registered for this account.",
+        message: [
+          "No active iOS devices are registered for this account.",
+          projectResolution.message,
+        ]
+          .filter(Boolean)
+          .join(" "),
       });
     }
 
@@ -371,6 +387,7 @@ export const hooksRoute = new Hono()
           to: devices.map((registeredDevice) => registeredDevice.expoPushToken),
           eventId,
           serviceId: svc.id,
+          ...(projectResolution.projectId ? { projectId: projectResolution.projectId } : {}),
           resolved,
         });
     const result = await sendPushMessages(messages);
@@ -450,6 +467,7 @@ export const hooksRoute = new Hono()
             },
           }
         : {}),
+      ...(projectResolution.message ? { message: projectResolution.message } : {}),
     });
   })
   .get("/:token/events/:eventId", async (c) => {
@@ -582,6 +600,11 @@ export const hooksRoute = new Hono()
 async function markEventWithdrawn(eventId: string, status: string): Promise<void> {
   await Promise.all([
     db.update(event).set({ status }).where(eq(event.id, eventId)),
+    // A withdrawn notification must not linger as an unread inbox item.
+    db
+      .update(event)
+      .set({ readAt: new Date() })
+      .where(and(eq(event.id, eventId), isNull(event.readAt))),
     db
       .update(interaction)
       .set({ status: "canceled", canceledAt: new Date() })

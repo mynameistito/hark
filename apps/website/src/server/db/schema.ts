@@ -103,6 +103,28 @@ export const service = sqliteTable(
   (table) => [index("service_user_id_idx").on(table.userId)],
 );
 
+/**
+ * User-scoped notification project. Identity is the case-insensitive,
+ * NFC-normalized name; the display name keeps the sender's original casing.
+ */
+export const project = sqliteTable(
+  "project",
+  {
+    id: text("id").primaryKey(),
+    userId: text("user_id")
+      .notNull()
+      .references(() => user.id, { onDelete: "cascade" }),
+    name: text("name").notNull(),
+    normalizedName: text("normalized_name").notNull(),
+    createdAt: integer("created_at", { mode: "timestamp_ms" }).notNull(),
+    updatedAt: integer("updated_at", { mode: "timestamp_ms" }).notNull(),
+  },
+  (table) => [
+    uniqueIndex("project_user_normalized_name_unique").on(table.userId, table.normalizedName),
+    index("project_user_created_at_idx").on(table.userId, table.createdAt),
+  ],
+);
+
 export const device = sqliteTable("device", {
   id: text("id").primaryKey(),
   userId: text("user_id")
@@ -123,7 +145,12 @@ export const device = sqliteTable("device", {
   lastSeenAt: integer("last_seen_at", { mode: "timestamp_ms" }).notNull(),
 });
 
-/** Small delivery log kept for debugging; not exposed as analytics. */
+/**
+ * Delivery log and project-inbox backing store; not exposed as analytics.
+ * Bodies are capped at ingestion (8,000 chars / 16 KiB UTF-8) and summaries at
+ * 500 chars. Retention follow-up: rows currently persist until account
+ * deletion; a scheduled prune of old read rows is planned but out of V1 scope.
+ */
 export const event = sqliteTable(
   "event",
   {
@@ -140,11 +167,21 @@ export const event = sqliteTable(
     error: text("error"),
     idempotencyKey: text("idempotency_key"),
     requestHash: text("request_hash"),
+    /** Optional project association; delivery survives project deletion. */
+    projectId: text("project_id").references(() => project.id, { onDelete: "set null" }),
+    /** Account-global read marker. Null means unread in the project inbox. */
+    readAt: integer("read_at", { mode: "timestamp_ms" }),
+    /** Stored metadata only in V1; `text` when null. */
+    bodyFormat: text("body_format"),
+    /** Sender-supplied digest used for push text and bounded previews. */
+    summary: text("summary"),
     createdAt: integer("created_at", { mode: "timestamp_ms" }).notNull(),
   },
   (table) => [
     uniqueIndex("event_service_idempotency_key_unique").on(table.serviceId, table.idempotencyKey),
     index("event_service_created_at_idx").on(table.serviceId, table.createdAt),
+    index("event_project_created_at_idx").on(table.projectId, table.createdAt),
+    index("event_unread_idx").on(table.serviceId, table.createdAt).where(sql`"read_at" is null`),
   ],
 );
 
@@ -189,6 +226,14 @@ export const agentNotification = sqliteTable(
     acceptedCount: integer("accepted_count").notNull().default(0),
     idempotencyKey: text("idempotency_key"),
     requestHash: text("request_hash"),
+    /** Optional project association; delivery survives project deletion. */
+    projectId: text("project_id").references(() => project.id, { onDelete: "set null" }),
+    /** Account-global read marker. Null means unread in the project inbox. */
+    readAt: integer("read_at", { mode: "timestamp_ms" }),
+    /** Stored metadata only in V1; `text` when null. */
+    bodyFormat: text("body_format"),
+    /** Sender-supplied digest used for push text and bounded previews. */
+    summary: text("summary"),
     createdAt: integer("created_at", { mode: "timestamp_ms" }).notNull(),
   },
   (table) => [
@@ -198,6 +243,10 @@ export const agentNotification = sqliteTable(
     ),
     index("agent_notification_token_created_at_idx").on(table.requesterTokenId, table.createdAt),
     index("agent_notification_user_created_at_idx").on(table.userId, table.createdAt),
+    index("agent_notification_project_created_at_idx").on(table.projectId, table.createdAt),
+    index("agent_notification_unread_idx")
+      .on(table.userId, table.createdAt)
+      .where(sql`"read_at" is null`),
   ],
 );
 

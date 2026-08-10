@@ -6,12 +6,10 @@ import {
   font,
   foregroundStyle,
   frame,
-  kerning,
   lineLimit,
   monospacedDigit,
   padding,
   progressViewStyle,
-  textCase,
   tint,
 } from "@expo/ui/swift-ui/modifiers";
 import type { LiveActivityLayout } from "expo-widgets";
@@ -67,17 +65,6 @@ export function HeroLiveActivityStyle(
       >
         <HStack spacing={8}>
           <Image systemName={symbol} color={accent} size={15} />
-          <Text
-            modifiers={[
-              font({ textStyle: "footnote", weight: "semibold" }),
-              textCase("uppercase"),
-              kerning(0.3),
-              foregroundStyle(secondary),
-              lineLimit(1),
-            ]}
-          >
-            {title}
-          </Text>
           <Spacer />
           {percentage ? (
             <Text
@@ -111,17 +98,6 @@ export function HeroLiveActivityStyle(
   const expandedLeading = (
     <HStack spacing={7} modifiers={[padding({ leading: 4 })]}>
       <Image systemName={symbol} color={accent} size={14} />
-      <Text
-        modifiers={[
-          font({ textStyle: "footnote", weight: "semibold" }),
-          textCase("uppercase"),
-          kerning(0.3),
-          foregroundStyle(secondary),
-          lineLimit(1),
-        ]}
-      >
-        {title}
-      </Text>
     </HStack>
   );
 

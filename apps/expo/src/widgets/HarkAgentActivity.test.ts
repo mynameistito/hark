@@ -286,7 +286,7 @@ describe("HarkAgentActivity layout styles", () => {
     expect(images[0]?.props.size).toBe(30);
   });
 
-  it("hero makes status the headline with an uppercase eyebrow and a full-bleed bar", () => {
+  it("hero makes status the headline and uses a full-bleed bar", () => {
     const slots = render({ ...baseProps, style: "hero" });
     const banner = slots.banner as Node;
     // Root carries no padding so the trailing ProgressView reaches the card edges.
@@ -296,8 +296,7 @@ describe("HarkAgentActivity layout styles", () => {
     const statusText = findAll(banner, "Text").find((text) => text.props.children === "Building");
     expect(statusText).toBeDefined();
     expect(fontArgs(statusText)).toMatchObject({ size: 22, weight: "bold" });
-    const titleText = findAll(banner, "Text").find((text) => text.props.children === "Deploy #184");
-    expect(modifierNames(titleText as Node)).toContain("textCase");
+    expect(texts(banner)).not.toContain("Deploy #184");
   });
 
   it("terminal renders a monospace prompt line and a comment detail", () => {

@@ -1,5 +1,5 @@
 import { Link } from "react-router";
-import { DOC_CONTENT, DOCS_EYEBROW, DOCS_TITLE } from "../../shared/docs/content";
+import { DOC_CONTENT, DOCS_TITLE } from "../../shared/docs/content";
 import { DocsSidebar } from "../components/DocsSidebar";
 import { DocSectionView } from "./docs/blocks";
 
@@ -24,7 +24,6 @@ export function Docs() {
         <DocsSidebar />
 
         <main className="min-w-0 flex-1 pt-8 pb-24 lg:pt-12">
-          <p className="text-accent-text mb-3 text-xs font-medium uppercase">{DOCS_EYEBROW}</p>
           <h1 className="max-w-xl text-3xl font-semibold tracking-tight text-balance">
             {DOCS_TITLE}
           </h1>

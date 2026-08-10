@@ -1,11 +1,10 @@
 import { useEffect, useState } from "react";
 
 interface Props {
-  label?: string;
   value: string;
 }
 
-export function CopyField({ label, value }: Props) {
+export function CopyField({ value }: Props) {
   const [copied, setCopied] = useState(false);
 
   useEffect(() => {
@@ -25,9 +24,6 @@ export function CopyField({ label, value }: Props) {
 
   return (
     <div className="min-w-0">
-      {label ? (
-        <div className="mb-1 text-xs font-medium text-ink-subtle uppercase">{label}</div>
-      ) : null}
       <div className="flex items-center gap-2">
         <code
           className="block min-w-0 flex-1 truncate font-mono text-[13px] leading-relaxed text-ink-muted"

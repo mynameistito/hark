@@ -51,6 +51,19 @@ when the notification is tapped, and repeatable `--device` routes to specific de
 Use `--idempotency-key` for safe retries and `--stdin` to merge a JSON payload from stdin under any
 explicit flags. The command exits `7` when no push was accepted.
 
+Bodies hold up to 8,000 characters (16 KiB of UTF-8); the CLI rejects anything larger before
+sending. `--project <name>` files the notification into a named project in the Hark app inbox —
+project names are case-insensitive per account and created on first use. `--summary <text>` sets
+the short text shown in the push banner and list previews while the full body stays readable in
+the app; provide one whenever the body is long. `--markdown` (or `--body-format markdown`) records
+the body as Markdown for future rendering; the app displays plain text with tappable links in V1.
+
+```bash
+long_report="$(./release-report.sh)"
+jq -n --arg body "$long_report" '{ body: $body }' | harkctl notify --stdin \
+  --title "Deploy bot" --project "Acme App" --summary "Deploy finished: 3 services updated"
+```
+
 `--url` accepts HTTPS universal links, app deep links, and Apple Shortcuts URLs. Quote destinations
 that contain `&` in a shell:
 

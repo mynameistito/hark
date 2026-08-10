@@ -14,6 +14,7 @@ import { devicesRoute } from "./routes/devices";
 import { docsTextRoute } from "./routes/docs";
 import { eventsRoute } from "./routes/events";
 import { hooksRoute } from "./routes/hooks";
+import { inboxRoute } from "./routes/inbox";
 import {
   agentRoute,
   interactionCredentialResponseRoute,
@@ -61,6 +62,7 @@ app.route("/api/agent/activities", activitiesAgentRoute);
 app.route("/api/agent", agentRoute);
 app.route("/api/activities", activitiesSessionRoute);
 app.route("/api/activity-feed", activityFeedRoute);
+app.route("/api/inbox", inboxRoute);
 app.route("/api/interactions", interactionResponseRoute);
 app.route("/api/interaction-responses", interactionCredentialResponseRoute);
 app.route("/api/live-activity-interactions", liveActivityInteractionResponseRoute);

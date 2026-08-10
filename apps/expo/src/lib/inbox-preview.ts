@@ -1,4 +1,11 @@
-import type { InboxActivityDto, InboxInteractionDto, InboxLiveActivityDto } from "@hark/contracts";
+import type {
+  InboxActivityDto,
+  InboxInteractionDto,
+  InboxLiveActivityDto,
+  InboxNotificationDetailDto,
+  InboxNotificationSummaryDto,
+  InboxProjectsDto,
+} from "@hark/contracts";
 
 export const PREVIEW_AVATAR_URL =
   "https://pbs.twimg.com/profile_images/2070959207273082880/HZoVBuA2_400x400.jpg";
@@ -10,6 +17,7 @@ export const previewPending: InboxInteractionDto[] = [
     id: "preview-deploy",
     sourceName: "Release agent",
     sourceImageUrl: PREVIEW_AVATAR_URL,
+    projectId: "preview-project-app",
     title: "Production deploy",
     prompt: "Deploy version 2.4.1 to production?",
     kind: "approval",
@@ -33,6 +41,7 @@ export const previewPending: InboxInteractionDto[] = [
     id: "preview-support",
     sourceName: "Support bot",
     sourceImageUrl: PREVIEW_AVATAR_URL,
+    projectId: null,
     title: "Customer reply",
     prompt: "How should I respond to the customer's request for an extension?",
     kind: "reply",
@@ -59,6 +68,7 @@ export const previewActive: InboxLiveActivityDto[] = [
     id: "preview-activity",
     sourceName: "Deploy agent",
     sourceImageUrl: PREVIEW_AVATAR_URL,
+    projectId: "preview-project-app",
     key: "production-deploy",
     props: {
       schemaVersion: 1,
@@ -122,3 +132,79 @@ export const previewActivity: InboxActivityDto[] = Array.from({ length: 24 }, (_
     createdAt: new Date(now - (index + 1) * 15 * 60_000).toISOString(),
   };
 });
+
+export const previewProjects: InboxProjectsDto = {
+  projects: [
+    {
+      projectId: "preview-project-app",
+      name: "Acme App",
+      unreadCount: 3,
+      totalCount: 18,
+      latestTitle: "Deploy bot",
+      latestPreview: "Deploy finished: 3 services updated, 0 rollbacks",
+      latestImageUrl: PREVIEW_AVATAR_URL,
+      latestAt: new Date(now - 4 * 60_000).toISOString(),
+    },
+    {
+      projectId: "preview-project-site",
+      name: "Marketing site",
+      unreadCount: 0,
+      totalCount: 7,
+      latestTitle: "Build agent",
+      latestPreview: "Lighthouse run complete — all budgets passing",
+      latestImageUrl: PREVIEW_AVATAR_URL,
+      latestAt: new Date(now - 3 * 3_600_000).toISOString(),
+    },
+    {
+      projectId: null,
+      name: "Other",
+      unreadCount: 1,
+      totalCount: 42,
+      latestTitle: "Monitor",
+      latestPreview: "Disk usage back under 80% on web-1",
+      latestImageUrl: PREVIEW_AVATAR_URL,
+      latestAt: new Date(now - 26 * 3_600_000).toISOString(),
+    },
+  ],
+  totalUnread: 4,
+};
+
+export const previewNotifications: InboxNotificationSummaryDto[] = Array.from(
+  { length: 14 },
+  (_, index) => ({
+    id: `event:preview-notification-${index}`,
+    origin: "event" as const,
+    projectId: "preview-project-app",
+    projectName: "Acme App",
+    sourceName: index % 3 === 0 ? "Deploy bot" : "Build agent",
+    sourceImageUrl: PREVIEW_AVATAR_URL,
+    title: index % 3 === 0 ? "Deploy finished" : `Build ${48 - index} passed`,
+    preview:
+      index % 3 === 0
+        ? "Deploy finished: 3 services updated, 0 rollbacks"
+        : "Integration tests passed on iOS and web targets",
+    url: null,
+    bodyFormat: "text" as const,
+    readAt: index < 3 ? null : new Date(now - index * 50 * 60_000).toISOString(),
+    createdAt: new Date(now - (index + 1) * 45 * 60_000).toISOString(),
+  }),
+);
+
+export function previewNotificationDetail(id: string): InboxNotificationDetailDto {
+  const summary = previewNotifications.find((item) => item.id === id) ?? previewNotifications[0];
+  if (!summary) throw new Error("Missing preview notification");
+  return {
+    ...summary,
+    id,
+    preview: summary.preview,
+    body: [
+      "Deploy finished: 3 services updated, 0 rollbacks.",
+      "",
+      "Services: api (2m 14s), worker (1m 52s), web (3m 08s).",
+      "Release notes: https://example.com/releases/2-4-1",
+      "Dashboard: https://example.com/deploys/184",
+    ].join("\n"),
+    summary: "Deploy finished: 3 services updated, 0 rollbacks",
+    status: "accepted",
+  };
+}

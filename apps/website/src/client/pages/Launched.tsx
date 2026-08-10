@@ -22,9 +22,6 @@ export function Launched() {
 
       <main className="mx-auto w-full max-w-3xl flex-1 px-6 pt-10 pb-24">
         <article className="max-w-2xl">
-          <p className="mb-4 text-xs font-semibold tracking-[0.14em] text-accent-text uppercase">
-            Hark for iPhone
-          </p>
           <h1 className="max-w-xl text-4xl leading-[1.05] font-semibold tracking-[-0.035em] text-balance sm:text-5xl">
             Hark is live on the App Store.
           </h1>

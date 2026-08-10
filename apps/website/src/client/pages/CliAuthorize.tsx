@@ -79,12 +79,7 @@ export function CliAuthorize() {
 
       <main className="mx-auto flex w-full max-w-lg flex-1 items-center px-5 pb-20 sm:px-6">
         <section className="w-full rounded-2xl border border-line bg-surface p-5 shadow-xl shadow-ink/5 sm:p-8 dark:shadow-none dark:ring-1 dark:ring-white/10">
-          <p className="text-accent-text text-xs font-semibold uppercase tracking-wide">
-            CLI access
-          </p>
-          <h1 className="mt-2 text-2xl font-semibold text-balance">
-            Authorize a command-line client
-          </h1>
+          <h1 className="text-2xl font-semibold text-balance">Authorize a command-line client</h1>
 
           {!submittedCode ? (
             <form className="mt-6" onSubmit={lookUp}>

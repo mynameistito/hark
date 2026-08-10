@@ -455,6 +455,115 @@ test("notify merges --stdin JSON under explicit flags and exits 7 when nothing i
   }
 });
 
+test("notify sends project, summary, and body format metadata", async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async (_url, init) => {
+    assert.deepEqual(JSON.parse(init.body), {
+      body: "Deploy finished with a very long report",
+      project: "Acme App",
+      summary: "Deploy finished",
+      bodyFormat: "markdown",
+    });
+    return Response.json({ accepted: 1, notification: { id: "anot_prj" } }, { status: 201 });
+  };
+  try {
+    const result = await execute(
+      [
+        "notify",
+        "Deploy finished with a very long report",
+        "--project",
+        "Acme App",
+        "--summary",
+        "Deploy finished",
+        "--markdown",
+      ],
+      { HARK_TOKEN: "hark_test", HARK_API_URL: "https://example.test" },
+    );
+    assert.equal(result.exitCode, 0);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("notify --body-format validates values and conflicts with --markdown text", async () => {
+  await assert.rejects(
+    execute(["notify", "Hi", "--body-format", "html"], { HARK_TOKEN: "hark_test" }),
+    /--body-format must be text or markdown/,
+  );
+  await assert.rejects(
+    execute(["notify", "Hi", "--markdown", "--body-format", "text"], {
+      HARK_TOKEN: "hark_test",
+    }),
+    /--markdown conflicts with --body-format text/,
+  );
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async (_url, init) => {
+    assert.equal(JSON.parse(init.body).bodyFormat, "markdown");
+    return Response.json({ accepted: 1, notification: { id: "anot_md" } }, { status: 201 });
+  };
+  try {
+    const result = await execute(["notify", "Hi", "--body-format", "markdown"], {
+      HARK_TOKEN: "hark_test",
+      HARK_API_URL: "https://example.test",
+    });
+    assert.equal(result.exitCode, 0);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("notify bounds bodies to the server limits before sending", async () => {
+  const originalFetch = globalThis.fetch;
+  let requests = 0;
+  globalThis.fetch = async () => {
+    requests += 1;
+    return Response.json({ accepted: 1, notification: { id: "anot_big" } }, { status: 201 });
+  };
+  try {
+    // 8,001 characters: over the character cap without any request.
+    await assert.rejects(
+      execute(["notify", "x".repeat(8001)], {
+        HARK_TOKEN: "hark_test",
+        HARK_API_URL: "https://example.test",
+      }),
+      /at most 8000 characters/,
+    );
+    // 6,000 three-byte glyphs: 18,000 bytes of UTF-8, over the byte cap.
+    await assert.rejects(
+      execute(["notify", "気".repeat(6000)], {
+        HARK_TOKEN: "hark_test",
+        HARK_API_URL: "https://example.test",
+      }),
+      /16384 bytes/,
+    );
+    assert.equal(requests, 0);
+    // Exactly at the caps still sends, including via --stdin merge.
+    const atLimit = await execute(["notify", "x".repeat(8000)], {
+      HARK_TOKEN: "hark_test",
+      HARK_API_URL: "https://example.test",
+    });
+    assert.equal(atLimit.exitCode, 0);
+    assert.equal(requests, 1);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("notify ask rejects the notify-only project and format flags", async () => {
+  await assert.rejects(
+    execute(["notify", "ask", "Deploy?", "--approval", "--project", "Acme"], {
+      HARK_TOKEN: "hark_test",
+    }),
+    /apply to notify, not notify ask/,
+  );
+  await assert.rejects(
+    execute(["notify", "ask", "Deploy?", "--approval", "--markdown"], {
+      HARK_TOKEN: "hark_test",
+    }),
+    /apply to notify, not notify ask/,
+  );
+});
+
 test("notify -- ask sends the literal body ask instead of the subcommand", async () => {
   const originalFetch = globalThis.fetch;
   const calls = [];

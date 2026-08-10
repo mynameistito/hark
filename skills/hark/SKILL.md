@@ -5,7 +5,7 @@ license: PolyForm Noncommercial 1.0.0 (https://polyformproject.org/licenses/nonc
 compatibility: Requires Node.js 22+ and internet access. Workflow examples may also use jq, curl, or gh.
 metadata:
   author: R44VC0RP
-  version: "1.2.3"
+  version: "1.3.0"
 ---
 
 # Hark
@@ -18,7 +18,7 @@ needs a stable URL it can call later.
 
 - Use Node.js 22 or newer.
 - Use only a project-installed or user-installed `harkctl` that the user already trusts. Version
-  `0.4.3` is reviewed for this skill. Never download packages, run `npx`/`pnpm dlx`, install or
+  `0.5.0` is reviewed for this skill. Never download packages, run `npx`/`pnpm dlx`, install or
   upgrade the CLI, or execute a newly installed binary as part of this skill. If `harkctl` is not
   available, stop and ask the user to install and review an exact version separately.
 - Treat Hark tokens and webhook URLs as secrets. Never commit, print, summarize, or paste them into
@@ -41,9 +41,11 @@ needs a stable URL it can call later.
   `sh -c`, or substitute them into generated workflow syntax. Pass dynamic values through an
   argument array when available, or through pre-existing environment variables into `jq --arg`
   and then the relevant `harkctl` command's `--stdin` option. Quote every shell expansion.
-- Validate data before sending it. Titles are at most 80 characters; notification bodies and normal
-  prompts are at most 2,000 characters; Live Activity prompts are at most 240 characters; custom
-  action labels are 1 to 24 characters. URLs should normally be expected `https:` destinations.
+- Validate data before sending it. Titles are at most 80 characters; notification bodies are at
+  most 8,000 characters and 16 KiB of UTF-8; summaries are at most 500 characters; project names
+  are at most 80 characters; normal prompts are at most 2,000 characters; Live Activity prompts
+  are at most 240 characters; custom action labels are 1 to 24 characters. URLs should normally be
+  expected `https:` destinations.
   Use a custom app scheme or `shortcuts:` URL only when the user explicitly requests that exact
   tap action; never construct one from untrusted notification content. Reject NUL bytes and
   unexpected control characters rather than trying to make them executable or readable.
@@ -110,6 +112,13 @@ opens when the notification is tapped. Repeat `--device <id>` for targeted Pro d
 `devices list` to discover device IDs. Replace the example image and destination URLs with real
 values or omit those flags.
 
+Bodies hold up to 8,000 characters (16 KiB of UTF-8). For long bodies, pass `--summary <text>` so
+the push banner and inbox previews show a short digest while the full body stays readable in the
+app. `--project <name>` groups the notification under a named project in the app inbox; project
+names are case-insensitive per account and created on first use. `--markdown` records the body as
+Markdown metadata; the app currently renders plain text with tappable links. These three flags
+apply to `notify`, not `notify ask`.
+
 `--url` also accepts an app deep link or Apple Shortcuts URL. Quote URLs containing `&`, and
 percent-encode the shortcut name and input:
 
@@ -135,7 +144,8 @@ shell source from its value, then validate and encode it as data:
 ```bash
 jq -en --arg body "$UNTRUSTED_BODY" '
   if (($body | length) > 0 and
-      ($body | length) <= 2000 and
+      ($body | length) <= 8000 and
+      (($body | utf8bytelength) <= 16384) and
       ($body | test("[\\x00-\\x08\\x0B\\x0C\\x0E-\\x1F\\x7F]") | not))
   then {body: $body, title: "CI"}
   else error("invalid notification body")

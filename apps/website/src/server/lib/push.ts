@@ -11,6 +11,7 @@ import {
 } from "@hark/contracts";
 import { Expo, type ExpoPushMessage, type ExpoPushTicket } from "expo-server-sdk";
 import { env } from "../env";
+import { fitPushMessage } from "./push-preview";
 
 export interface ServiceDefaults {
   title: string;
@@ -23,6 +24,8 @@ export interface ResolvedNotification {
   body: string;
   imageUrl?: string;
   url?: string;
+  /** Sender-supplied digest; when present it replaces the body in push text. */
+  summary?: string;
 }
 
 /** Webhook overrides win; otherwise fall back to the service defaults. */
@@ -35,6 +38,7 @@ export function resolveNotification(
     body: request.body,
     imageUrl: request.imageUrl ?? service.imageUrl ?? undefined,
     url: request.url ?? service.url ?? undefined,
+    ...(request.summary !== undefined ? { summary: request.summary } : {}),
   };
 }
 
@@ -44,6 +48,8 @@ export interface BuildPushInput {
   serviceId: string;
   /** Overrides the thread grouping; defaults to the service so each service is one conversation. */
   conversationKey?: string;
+  /** Optional project association carried as backward-compatible push metadata. */
+  projectId?: string;
   resolved: ResolvedNotification;
 }
 
@@ -89,7 +95,7 @@ export function buildWelcomePushMessages(to: string): ExpoPushMessage[] {
 }
 
 export function buildPushMessages(input: BuildPushInput): ExpoPushMessage[] {
-  const { to, eventId, serviceId, conversationKey, resolved } = input;
+  const { to, eventId, serviceId, conversationKey, projectId, resolved } = input;
   const data: PushData = {
     v: PUSH_SCHEMA_VERSION,
     eventId,
@@ -99,17 +105,23 @@ export function buildPushMessages(input: BuildPushInput): ExpoPushMessage[] {
     ...(resolved.imageUrl ? { avatarUrl: resolved.imageUrl } : {}),
     ...(resolved.url ? { url: resolved.url } : {}),
     conversationId: `hark-${conversationKey ?? serviceId}`,
+    ...(projectId ? { projectId } : {}),
   };
 
-  return to.map((token) => ({
-    to: token,
-    title: resolved.title,
-    body: resolved.body,
-    priority: "high",
-    mutableContent: true,
-    ...(resolved.imageUrl ? { richContent: { image: resolved.imageUrl } } : {}),
-    data,
-  }));
+  // The full body never enters the push payload: the summary wins when the
+  // sender provided one, and the whole message is byte-fit below the APNs
+  // size cap (body first, then optional display metadata).
+  return to.map((token) =>
+    fitPushMessage({
+      to: token,
+      title: resolved.title,
+      body: resolved.summary ?? resolved.body,
+      priority: "high",
+      mutableContent: true,
+      ...(resolved.imageUrl ? { richContent: { image: resolved.imageUrl } } : {}),
+      data,
+    }),
+  );
 }
 
 export function buildNotificationWithdrawalPushMessages(
@@ -161,16 +173,18 @@ export function buildInteractionPushMessages(input: BuildInteractionPushInput): 
     ...(input.imageUrl ? { avatarUrl: input.imageUrl } : {}),
     ...(input.url ? { url: input.url } : {}),
   };
-  return input.to.map((to) => ({
-    to,
-    title: input.title,
-    body: input.prompt,
-    categoryId,
-    priority: "high",
-    mutableContent: true,
-    ...(input.imageUrl ? { richContent: { image: input.imageUrl } } : {}),
-    data,
-  }));
+  return input.to.map((to) =>
+    fitPushMessage({
+      to,
+      title: input.title,
+      body: input.prompt,
+      categoryId,
+      priority: "high",
+      mutableContent: true,
+      ...(input.imageUrl ? { richContent: { image: input.imageUrl } } : {}),
+      data,
+    }),
+  );
 }
 
 let expoClient: Expo | undefined;

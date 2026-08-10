@@ -24,7 +24,12 @@ vi.mock("expo-notifications", () => ({
   setNotificationCategoryAsync: vi.fn(),
 }));
 
-vi.mock("react-native", () => ({ Linking: { openURL: vi.fn(async () => undefined) } }));
+vi.mock("expo-router", () => ({ router: { push: vi.fn() } }));
+
+vi.mock("react-native", () => ({
+  Linking: { openURL: vi.fn(async () => undefined) },
+  Alert: { alert: vi.fn() },
+}));
 
 vi.mock("./analytics", () => ({ trackAppEvent: vi.fn() }));
 vi.mock("./auth", () => ({ getCookie: () => state.cookie }));
@@ -49,6 +54,7 @@ vi.mock("./api", () => ({
   },
 }));
 
+import { router } from "expo-router";
 import { Linking } from "react-native";
 import {
   clearInteractionResponses,
@@ -92,6 +98,15 @@ function defaultResponse(url: string) {
   } as never;
 }
 
+function defaultResponseWithData(data: Record<string, unknown>) {
+  return {
+    actionIdentifier: "expo.modules.notifications.actions.DEFAULT",
+    notification: {
+      request: { content: { data } },
+    },
+  } as never;
+}
+
 afterEach(async () => {
   vi.clearAllMocks();
   state.cookie = "session";
@@ -118,6 +133,46 @@ describe("notification tap destinations", () => {
       expect(Linking.openURL).not.toHaveBeenCalled();
     },
   );
+
+  it("keeps the custom URL tap behavior even when an eventId is present", async () => {
+    await handleNotificationResponse(
+      defaultResponseWithData({
+        url: "https://example.com/builds/48",
+        eventId: "evt_1",
+      }),
+    );
+    expect(Linking.openURL).toHaveBeenCalledWith("https://example.com/builds/48");
+    expect(router.push).not.toHaveBeenCalled();
+  });
+
+  it("navigates to the detail route when there is no URL and no interaction", async () => {
+    await handleNotificationResponse(defaultResponseWithData({ eventId: "evt_1" }));
+    expect(Linking.openURL).not.toHaveBeenCalled();
+    expect(router.push).toHaveBeenCalledWith({
+      pathname: "/notification/[id]",
+      params: { id: "event:evt_1" },
+    });
+
+    await handleNotificationResponse(defaultResponseWithData({ eventId: "anot_2" }));
+    expect(router.push).toHaveBeenLastCalledWith({
+      pathname: "/notification/[id]",
+      params: { id: "notification:anot_2" },
+    });
+  });
+
+  it("never navigates for interaction taps or empty payloads", async () => {
+    await handleNotificationResponse(
+      defaultResponseWithData({
+        interactionId: "int_1",
+        actionDigest: DIGEST,
+        eventId: "evt_1",
+      }),
+    );
+    await handleNotificationResponse(defaultResponseWithData({}));
+    await handleNotificationResponse(defaultResponseWithData({ eventId: "" }));
+    expect(router.push).not.toHaveBeenCalled();
+    expect(Linking.openURL).not.toHaveBeenCalled();
+  });
 });
 
 describe("interaction response queue", () => {

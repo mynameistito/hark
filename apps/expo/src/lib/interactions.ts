@@ -11,11 +11,13 @@ import {
   tapDestinationUrlSchema,
 } from "@hark/contracts";
 import * as Notifications from "expo-notifications";
+import { router } from "expo-router";
 import * as SecureStore from "expo-secure-store";
 import { Linking } from "react-native";
 import { trackAppEvent } from "./analytics";
 import { ApiError, api } from "./api";
 import { getCookie } from "./auth";
+import { compositeIdForPushEvent } from "./inbox-body";
 
 export const DEVICE_ID_KEY = "hark.device.serverId";
 const RETRY_QUEUE_KEY = "hark.interaction.responseQueue.v1";
@@ -198,11 +200,35 @@ export async function registerInteractionCategories(): Promise<void> {
   ]);
 }
 
+/** Best-effort navigation that tolerates a not-yet-mounted router on cold start. */
+function openNotificationDetail(compositeId: string): void {
+  const navigate = () => {
+    router.push({ pathname: "/notification/[id]", params: { id: compositeId } });
+  };
+  try {
+    navigate();
+  } catch {
+    setTimeout(() => {
+      try {
+        navigate();
+      } catch {
+        // The inbox remains one tap away; navigation is best effort.
+      }
+    }, 500);
+  }
+}
+
 export async function handleNotificationResponse(
   response: Notifications.NotificationResponse,
 ): Promise<void> {
   const data = response.notification.request.content.data as
-    | { interactionId?: string; actionDigest?: string; responseToken?: string; url?: string }
+    | {
+        interactionId?: string;
+        actionDigest?: string;
+        responseToken?: string;
+        url?: string;
+        eventId?: string;
+      }
     | undefined;
   if (response.actionIdentifier === Notifications.DEFAULT_ACTION_IDENTIFIER) {
     const destination = tapDestinationUrlSchema.safeParse(data?.url);
@@ -221,7 +247,15 @@ export async function handleNotificationResponse(
       path: "/inbox",
       properties: { destinationHost },
     });
-    if (destination.success) await Linking.openURL(destination.data).catch(() => {});
+    // A custom tap URL keeps its exact existing behavior and always wins.
+    if (destination.success) {
+      await Linking.openURL(destination.data).catch(() => {});
+      return;
+    }
+    // No URL and no interaction: open the notification detail when possible.
+    if (!data?.interactionId && typeof data?.eventId === "string" && data.eventId.length > 0) {
+      openNotificationDetail(compositeIdForPushEvent(data.eventId));
+    }
     return;
   }
   if (!data?.interactionId || !data.actionDigest) return;

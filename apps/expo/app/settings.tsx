@@ -1,12 +1,29 @@
+import {
+  getAppIconName,
+  setAlternateAppIcon,
+  supportsAlternateIcons,
+} from "expo-alternate-app-icons";
+import * as Device from "expo-device";
 import * as Notifications from "expo-notifications";
 import { Redirect, useRouter } from "expo-router";
 import * as SecureStore from "expo-secure-store";
 import { StatusBar } from "expo-status-bar";
 import { SymbolView } from "expo-symbols";
 import { useEffect, useState } from "react";
-import { Alert, Linking, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
+import {
+  ActivityIndicator,
+  Alert,
+  Image,
+  Linking,
+  Pressable,
+  ScrollView,
+  StyleSheet,
+  Text,
+  View,
+} from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { api } from "../src/lib/api";
+import { type AppIconOption, appIconLabel, appIconOptions } from "../src/lib/app-icons";
 import { authClient, useSession } from "../src/lib/auth";
 import { clearInteractionResponses, DEVICE_ID_KEY } from "../src/lib/interactions";
 import { colors, fonts, tightTracking } from "../src/lib/theme";
@@ -17,9 +34,13 @@ const APNS_TOKEN_KEY = "hark.device.apnsToken";
 export default function SettingsScreen() {
   const { data: session, isPending } = useSession();
   const router = useRouter();
+  const simulatorPreview = __DEV__ && !Device.isDevice;
   const [notificationsAllowed, setNotificationsAllowed] = useState<boolean | null>(null);
   const [registered, setRegistered] = useState<boolean | null>(null);
   const [liveActivitiesCapable, setLiveActivitiesCapable] = useState<boolean | null>(null);
+  const [currentAppIcon, setCurrentAppIcon] = useState<string | null>(() => getAppIconName());
+  const [iconPickerOpen, setIconPickerOpen] = useState(false);
+  const [changingAppIcon, setChangingAppIcon] = useState<string | null>(null);
 
   useEffect(() => {
     void Promise.all([
@@ -36,7 +57,7 @@ export default function SettingsScreen() {
     });
   }, []);
 
-  if (!isPending && !session) return <Redirect href="/" />;
+  if (!isPending && !session && !simulatorPreview) return <Redirect href="/" />;
 
   const clearDevice = async () => {
     await Promise.all([
@@ -104,6 +125,22 @@ export default function SettingsScreen() {
     );
   };
 
+  const changeAppIcon = async (option: AppIconOption) => {
+    if (option.alternateName === currentAppIcon || changingAppIcon) return;
+    setChangingAppIcon(option.id);
+    try {
+      const selected = await setAlternateAppIcon(option.alternateName);
+      setCurrentAppIcon(selected);
+    } catch (error) {
+      Alert.alert(
+        "Could not change app icon",
+        error instanceof Error ? error.message : "Please try again.",
+      );
+    } finally {
+      setChangingAppIcon(null);
+    }
+  };
+
   return (
     <SafeAreaView style={styles.container} edges={["top"]}>
       <StatusBar style="dark" />
@@ -121,7 +158,6 @@ export default function SettingsScreen() {
           <View style={styles.iconButton} />
         </View>
 
-        <Text style={styles.sectionTitle}>Device</Text>
         <SettingsRow
           icon="bell.fill"
           label="Notifications"
@@ -147,8 +183,52 @@ export default function SettingsScreen() {
                 : "Not available"
           }
         />
+        <SettingsRow
+          icon="app.fill"
+          label="App icon"
+          value={supportsAlternateIcons ? appIconLabel(currentAppIcon) : "Unavailable"}
+          onPress={
+            supportsAlternateIcons
+              ? () => setIconPickerOpen((currentlyOpen) => !currentlyOpen)
+              : undefined
+          }
+        />
+        {iconPickerOpen && supportsAlternateIcons ? (
+          <View style={styles.appIconGrid}>
+            {appIconOptions.map((option) => {
+              const selected = option.alternateName === currentAppIcon;
+              const changing = changingAppIcon === option.id;
+              return (
+                <Pressable
+                  accessibilityLabel={`${option.label} app icon`}
+                  accessibilityRole="button"
+                  accessibilityState={{ selected, disabled: changingAppIcon !== null }}
+                  disabled={changingAppIcon !== null}
+                  key={option.id}
+                  onPress={() => void changeAppIcon(option)}
+                  style={({ pressed }) => [
+                    styles.appIconOption,
+                    selected && styles.appIconOptionSelected,
+                    pressed && styles.appIconOptionPressed,
+                  ]}
+                >
+                  <View style={styles.appIconPreviewFrame}>
+                    <Image source={option.image} style={styles.appIconPreview} />
+                    {changing ? (
+                      <View style={styles.appIconSpinner}>
+                        <ActivityIndicator color="#FFFFFF" />
+                      </View>
+                    ) : null}
+                  </View>
+                  <Text style={[styles.appIconName, selected && styles.appIconNameSelected]}>
+                    {option.label}
+                  </Text>
+                </Pressable>
+              );
+            })}
+          </View>
+        ) : null}
 
-        <Text style={styles.sectionTitle}>Account</Text>
         <SettingsRow icon="person.fill" label="Signed in as" value={session?.user.email ?? ""} />
         <Pressable accessibilityRole="button" onPress={signOut} style={styles.accountAction}>
           <Text style={styles.accountActionText}>Sign out</Text>
@@ -213,15 +293,6 @@ const styles = StyleSheet.create({
     fontSize: 17,
     letterSpacing: tightTracking(17),
   },
-  sectionTitle: {
-    marginTop: 30,
-    marginBottom: 8,
-    color: colors.muted,
-    fontFamily: fonts.semibold,
-    fontSize: 12,
-    letterSpacing: 0.55,
-    textTransform: "uppercase",
-  },
   row: {
     minHeight: 58,
     flexDirection: "row",
@@ -253,6 +324,58 @@ const styles = StyleSheet.create({
     fontSize: 13,
     textAlign: "right",
     letterSpacing: tightTracking(13),
+  },
+  appIconGrid: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    justifyContent: "space-between",
+    rowGap: 12,
+    paddingVertical: 14,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: colors.line,
+  },
+  appIconOption: {
+    flexBasis: "30%",
+    alignItems: "center",
+    gap: 6,
+    paddingVertical: 8,
+    borderWidth: 1,
+    borderColor: "transparent",
+    borderRadius: 14,
+  },
+  appIconOptionSelected: {
+    borderColor: colors.accent,
+    backgroundColor: colors.accentSoft,
+  },
+  appIconOptionPressed: {
+    opacity: 0.65,
+    transform: [{ scale: 0.96 }],
+  },
+  appIconPreviewFrame: {
+    width: 44,
+    height: 44,
+    borderRadius: 10,
+    overflow: "hidden",
+  },
+  appIconPreview: {
+    width: 44,
+    height: 44,
+  },
+  appIconSpinner: {
+    position: "absolute",
+    inset: 0,
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: "rgba(0, 0, 0, 0.28)",
+  },
+  appIconName: {
+    color: colors.muted,
+    fontFamily: fonts.medium,
+    fontSize: 12,
+    letterSpacing: tightTracking(12),
+  },
+  appIconNameSelected: {
+    color: colors.accent,
   },
   accountAction: {
     minHeight: 52,

@@ -75,7 +75,7 @@ function Block({ block }: { block: DocBlock }) {
     case "copy":
       return (
         <div className="rounded-xl border border-line bg-surface px-4 py-3">
-          <CopyField label={block.label} value={block.value} />
+          <CopyField value={block.value} />
         </div>
       );
     case "stylePreviews":
@@ -97,12 +97,12 @@ function Block({ block }: { block: DocBlock }) {
 /** Renders one chapter of `DOC_CONTENT`: lead, then each linkable subsection. */
 export function DocSectionView({ section }: { section: DocSectionData }) {
   return (
-    <DocSection id={section.id} pro={section.pro}>
+    <DocSection id={section.id}>
       <Lead>
         <Inlines source={section.lead} />
       </Lead>
       {section.subsections.map((subsection) => (
-        <DocSub id={subsection.id} key={subsection.id} pro={subsection.pro}>
+        <DocSub id={subsection.id} key={subsection.id}>
           {subsection.blocks.map((block) => (
             <Block block={block} key={blockKey(block)} />
           ))}

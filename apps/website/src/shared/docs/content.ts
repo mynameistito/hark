@@ -83,7 +83,6 @@ export interface DocSection {
 
 /** Page title, reused by the HTML `<h1>`, the prerendered `<title>`, and the markdown. */
 export const DOCS_TITLE = "Webhooks to iPhone notifications";
-export const DOCS_EYEBROW = "Documentation";
 export const DOCS_URL = "https://hark.ryan.ceo/docs";
 export const DOCS_MARKDOWN_URL = "https://hark.ryan.ceo/docs.md";
 
@@ -226,7 +225,8 @@ export const DOC_CONTENT: DocSection[] = [
               {
                 name: "body",
                 type: "string, required",
-                detail: "Notification message, 1 to 2,000 characters after trimming.",
+                detail:
+                  "Notification message, 1 to 8,000 characters (at most 16 KiB of UTF-8) after trimming. Interactive requests with `response` keep the 2,000-character limit.",
               },
               {
                 name: "title",
@@ -256,7 +256,42 @@ export const DOC_CONTENT: DocSection[] = [
                 type: "object, Pro",
                 detail: "Turns the notification into an approval, yes/no, or text prompt.",
               },
+              {
+                name: "project",
+                type: "string",
+                detail:
+                  "Project display name, up to 80 characters. Files the notification into that project in the Hark app inbox, creating it on first use.",
+              },
+              {
+                name: "summary",
+                type: "string",
+                detail:
+                  "Short digest, up to 500 characters. Replaces the body in the push banner and list previews; the full body stays readable in the app.",
+              },
+              {
+                name: "bodyFormat",
+                type: "enum",
+                detail:
+                  "`text` or `markdown`. Stored metadata describing the body; omitted means `text`.",
+              },
             ],
+          },
+        ],
+      },
+      {
+        id: "notification-projects",
+        blocks: [
+          {
+            kind: "p",
+            text: "Send an optional `project` display name to group notifications in the Hark app inbox. Project identity is case-insensitive and Unicode-normalized within your account, so `Acme App` and `acme app` are the same project; the first spelling you send becomes the display name. Notifications without a project land in a shared Other bucket.",
+          },
+          {
+            kind: "p",
+            text: "Long bodies stay intact in storage and in the app's notification detail, while the push banner and list rows show the `summary` when you provide one, or a bounded preview otherwise. Bodies render as plain text with tappable links; `bodyFormat` is recorded for future rendering and does not change V1 display.",
+          },
+          {
+            kind: "note",
+            text: "Accounts hold up to 500 projects. Once the cap is reached, a request naming a new project still delivers — the notification is stored without a project and the response carries an explanatory `message`. Existing project names keep resolving normally.",
           },
         ],
       },
@@ -780,7 +815,8 @@ curl -X POST ${EXAMPLE_ENDPOINT}/events/evt_Cxns2IdbF4H0TJYq/cancel`,
               {
                 name: "hero",
                 description:
-                  "Status becomes the headline, the title demotes to an eyebrow, and the bar runs edge to edge along the bottom of the card.",
+                  "Status becomes the headline and the bar runs edge to edge along the bottom of the card.",
+                nativeScreenshot: false,
               },
               {
                 name: "terminal",
@@ -1011,6 +1047,23 @@ harkctl permissions doctor`,
                 name: "--device",
                 type: "id, repeatable",
                 detail: "Target specific iPhones. Requires Hark Pro.",
+              },
+              {
+                name: "--project",
+                type: "string",
+                detail: "File the notification into a named project in the Hark app inbox.",
+              },
+              {
+                name: "--summary",
+                type: "string",
+                detail:
+                  "Short push/preview text for a long body. Bodies can hold up to 8,000 characters.",
+              },
+              {
+                name: "--markdown",
+                type: "boolean",
+                detail:
+                  "Record the body as Markdown (same as `--body-format markdown`); V1 renders plain text.",
               },
               {
                 name: "--idempotency-key",

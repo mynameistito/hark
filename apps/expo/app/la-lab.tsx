@@ -179,7 +179,7 @@ function Lab() {
           <Btn label="End" onPress={end} kind="danger" />
         </Row>
 
-        <Section label="Progress">
+        <Section>
           <Row>
             {PROGRESS_STEPS.map((step) => (
               <Btn
@@ -197,7 +197,7 @@ function Lab() {
           </Row>
         </Section>
 
-        <Section label="Symbol">
+        <Section>
           <Row>
             {LIVE_ACTIVITY_SYMBOLS.map((value) => (
               <Btn
@@ -210,7 +210,7 @@ function Lab() {
           </Row>
         </Section>
 
-        <Section label="Accent">
+        <Section>
           <Row>
             {ACCENTS.map((value) => (
               <Btn
@@ -223,7 +223,7 @@ function Lab() {
           </Row>
         </Section>
 
-        <Section label="Content">
+        <Section>
           <Row>
             <Btn
               label="Building"
@@ -270,7 +270,7 @@ function Lab() {
           </Row>
         </Section>
 
-        <Section label="Log">
+        <Section>
           {log.length === 0 ? <Text style={styles.logLine}>—</Text> : null}
           {log.map((line) => (
             <Text key={line} style={styles.logLine}>
@@ -283,13 +283,8 @@ function Lab() {
   );
 }
 
-function Section({ label, children }: { label: string; children: React.ReactNode }) {
-  return (
-    <View style={styles.section}>
-      <Text style={styles.sectionLabel}>{label}</Text>
-      {children}
-    </View>
-  );
+function Section({ children }: { children: React.ReactNode }) {
+  return <View style={styles.section}>{children}</View>;
 }
 
 function Row({ children }: { children: React.ReactNode }) {
@@ -329,7 +324,6 @@ const styles = StyleSheet.create({
   heading: { color: "#F2FBF8", fontSize: 22, fontWeight: "700" },
   caption: { color: "#8FA8A1", fontSize: 13, lineHeight: 18 },
   section: { gap: 8 },
-  sectionLabel: { color: "#5ED8B7", fontSize: 11, fontWeight: "700", textTransform: "uppercase" },
   row: { flexDirection: "row", flexWrap: "wrap", gap: 8 },
   btn: {
     paddingHorizontal: 12,

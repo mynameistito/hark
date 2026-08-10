@@ -1,16 +1,8 @@
 import { Link } from "react-router";
 
-const updated = "July 26, 2026";
+const updated = "August 9, 2026";
 
-function LegalLayout({
-  eyebrow,
-  title,
-  children,
-}: {
-  eyebrow: string;
-  title: string;
-  children: React.ReactNode;
-}) {
+function LegalLayout({ title, children }: { title: string; children: React.ReactNode }) {
   return (
     <div className="min-h-dvh">
       <header>
@@ -29,7 +21,6 @@ function LegalLayout({
         </div>
       </header>
       <main className="mx-auto w-full max-w-3xl px-6 py-10">
-        <p className="text-accent-text mb-3 text-xs font-medium uppercase">{eyebrow}</p>
         <h1 className="text-3xl font-semibold">{title}</h1>
         <p className="mt-3 text-sm text-ink-faint">Last updated {updated}</p>
         <div className="legal-copy mt-10 max-w-2xl space-y-8 text-sm leading-relaxed text-ink-muted">
@@ -51,7 +42,7 @@ function Section({ title, children }: { title: string; children: React.ReactNode
 
 export function Privacy() {
   return (
-    <LegalLayout eyebrow="Legal" title="Privacy Policy">
+    <LegalLayout title="Privacy Policy">
       <Section title="Overview">
         <p>
           Hark is operated by Ryan Vogel. This policy explains the information Hark processes to
@@ -75,8 +66,8 @@ export function Privacy() {
             webhook-token hashes, and encrypted webhook tokens.
           </li>
           <li>
-            Webhook content such as notification titles, bodies, images, destinations, idempotency
-            keys, timestamps, and delivery results.
+            Webhook and agent notification content such as titles, bodies, summaries, project names,
+            images, destinations, idempotency keys, timestamps, read state, and delivery results.
           </li>
           <li>
             Device information needed for delivery, including Expo and APNs push tokens, device
@@ -105,8 +96,9 @@ export function Privacy() {
             Product analytics such as page and app-screen visits, feature lifecycle events,
             first-touch campaign labels, referring and outbound hostnames, app version, coarse
             outcomes, and related account, service, device, anonymous-install, or session
-            identifiers. Hark never puts notification content, prompts, replies, tokens, full URLs,
-            IP addresses, email addresses, or user-agent strings in analytics.
+            identifiers. Hark never puts notification content, summaries, project names, prompts,
+            replies, tokens, full URLs, IP addresses, email addresses, or user-agent strings in
+            analytics.
           </li>
         </ul>
       </Section>
@@ -132,12 +124,14 @@ export function Privacy() {
 
       <Section title="Retention and deletion">
         <p>
-          We retain account and service data while your account is active and retain recent webhook
-          activity for product operation and troubleshooting. You can permanently delete your
-          account inside the Hark app. Deletion removes your services, devices, and activity from
-          the active database. For accounts using Apple, Hark first asks Apple to revoke stored
-          authorization grants; deletion stops and reports an error if that revocation cannot be
-          confirmed. Limited backup copies may remain temporarily until rotated.
+          We retain account and service data while your account is active. Webhook and agent
+          notification content — including titles, bodies, summaries, projects, and read state —
+          persists in your inbox and is not expired on a schedule; it is removed when your account
+          is deleted. You can permanently delete your account inside the Hark app. Deletion removes
+          your services, devices, projects, notifications, and activity from the active database.
+          For accounts using Apple, Hark first asks Apple to revoke stored authorization grants;
+          deletion stops and reports an error if that revocation cannot be confirmed. Limited backup
+          copies may remain temporarily until rotated.
         </p>
       </Section>
 
@@ -176,7 +170,7 @@ export function Privacy() {
 
 export function Terms() {
   return (
-    <LegalLayout eyebrow="Legal" title="Terms of Service">
+    <LegalLayout title="Terms of Service">
       <Section title="Agreement">
         <p>
           By using Hark, you agree to these terms. If you do not agree, do not use the service. You

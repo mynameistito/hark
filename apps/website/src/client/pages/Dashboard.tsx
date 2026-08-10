@@ -385,7 +385,7 @@ function WebhookReveal({
       </p>
       <div className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
         <div className="min-w-0 flex-1">
-          <CopyField label="Webhook URL" value={reveal.webhookUrl} />
+          <CopyField value={reveal.webhookUrl} />
         </div>
         <button
           type="button"
@@ -461,8 +461,7 @@ function PlanModal({
       >
         <div className="flex items-start justify-between gap-6">
           <div>
-            <p className="text-accent-text text-xs font-medium uppercase">Plans</p>
-            <h2 id="plans-title" className="mt-1 text-xl font-semibold">
+            <h2 id="plans-title" className="text-xl font-semibold">
               Choose how far Hark can reach.
             </h2>
             <p className="mt-1 text-sm text-ink-subtle">

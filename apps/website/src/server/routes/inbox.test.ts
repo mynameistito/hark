@@ -197,13 +197,19 @@ describe("mobile inbox", () => {
     const response = await app.request("/api/interactions");
     expect(response.status).toBe(200);
     const body = (await response.json()) as {
-      interactions: Array<{ id: string; sourceName: string; sourceImageUrl: string | null }>;
+      interactions: Array<{
+        id: string;
+        sourceName: string;
+        sourceImageUrl: string | null;
+        projectId?: string | null;
+      }>;
     };
     expect(body.interactions).toEqual([
       expect.objectContaining({
         id: "int_pending",
         sourceName: "Release agent",
         sourceImageUrl: "https://example.com/release.png",
+        projectId: null,
       }),
     ]);
   });

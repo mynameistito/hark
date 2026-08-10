@@ -70,11 +70,14 @@ Only `body` is required.
 
 | Field | Description |
 | --- | --- |
-| `body` | Notification text. |
+| `body` | Notification text, up to 8,000 characters (16 KiB of UTF-8). |
 | `title` | Optional sender-name override. |
 | `imageUrl` | Optional public HTTPS avatar URL. |
 | `url` | Optional web URL, app deep link, or Shortcuts URL opened when tapped. |
 | `deviceIds` | Optional Pro routing to specific devices. |
+| `project` | Optional project name that groups the notification in the app inbox. |
+| `summary` | Optional short digest used for the push banner and list previews. |
+| `bodyFormat` | Optional `text` or `markdown` metadata for the stored body. |
 
 Successful requests return an event ID and the number of push requests accepted for delivery:
 
