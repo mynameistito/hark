@@ -23,6 +23,15 @@
         "EXPO_PUBLIC_APNS_ENVIRONMENT": "sandbox"
       }
     },
+    "android-preview": {
+      "distribution": "internal",
+      "android": {
+        "buildType": "apk"
+      },
+      "env": {
+        "EXPO_PUBLIC_API_URL": "https://hark.ryan.ceo"
+      }
+    },
     "production": {
       "autoIncrement": true,
       "distribution": "store",
