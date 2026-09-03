@@ -68,7 +68,7 @@ function replayResponse(row: EventRow): {
       delivered: row.deliveredCount,
       idempotent: true,
       ...(row.status === "no_devices"
-        ? { message: "No active iOS devices are registered for this account." }
+        ? { message: "No active devices are registered for this account." }
         : {}),
     },
     status: 200,
@@ -154,7 +154,9 @@ export const hooksRoute = new Hono()
         return c.json<WebhookResponse>({ ok: false, error: "Invalid device selection" }, 400);
       }
       targetedDevices = selected.filter(
-        (registeredDevice) => registeredDevice.active && registeredDevice.platform === "ios",
+        (registeredDevice) =>
+          registeredDevice.active &&
+          (registeredDevice.platform === "ios" || registeredDevice.platform === "android"),
       );
     }
 
@@ -282,7 +284,11 @@ export const hooksRoute = new Hono()
         .select()
         .from(device)
         .where(
-          and(eq(device.userId, svc.userId), eq(device.active, true), eq(device.platform, "ios")),
+          and(
+            eq(device.userId, svc.userId),
+            eq(device.active, true),
+            inArray(device.platform, ["ios", "android"]),
+          ),
         )
         .orderBy(desc(device.lastSeenAt));
       devices =
@@ -361,10 +367,7 @@ export const hooksRoute = new Hono()
               },
             }
           : {}),
-        message: [
-          "No active iOS devices are registered for this account.",
-          projectResolution.message,
-        ]
+        message: ["No active devices are registered for this account.", projectResolution.message]
           .filter(Boolean)
           .join(" "),
       });
@@ -563,7 +566,7 @@ export const hooksRoute = new Hono()
           and(
             eq(device.userId, match.service.userId),
             eq(device.active, true),
-            eq(device.platform, "ios"),
+            inArray(device.platform, ["ios", "android"]),
           ),
         );
       const messages = buildNotificationWithdrawalPushMessages(
