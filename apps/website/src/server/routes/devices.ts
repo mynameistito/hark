@@ -8,6 +8,7 @@ import {
 } from "@hark/contracts";
 import { and, desc, eq, inArray, isNull } from "drizzle-orm";
 import { Hono } from "hono";
+import { z } from "zod";
 import { db } from "../db";
 import { device, liveActivity, liveActivityDelivery, user as userTable } from "../db/schema";
 import { track } from "../lib/analytics";
@@ -17,20 +18,30 @@ import { buildWelcomePushMessages, sendPushMessages } from "../lib/push";
 import { encryptLiveActivityToken } from "../lib/token";
 import { type AuthedEnv, requireAuth } from "../middleware";
 
+const crossPlatformDeviceRegisterSchema = deviceRegisterSchema.extend({
+  platform: z.enum(["ios", "android"]),
+});
+
 function toDto(row: typeof device.$inferSelect): DeviceDto {
   return {
     id: row.id,
-    platform: "ios",
+    // DeviceDto predates Android support; keep the runtime response accurate
+    // while the public contract is migrated without breaking older clients.
+    platform: (row.platform === "android" ? "android" : "ios") as DeviceDto["platform"],
     deviceName: row.deviceName,
     active: row.active,
-    liveActivitiesCapable: Boolean(row.liveActivityPushToStartTokenCiphertext),
+    liveActivitiesCapable:
+      row.platform === "ios" && Boolean(row.liveActivityPushToStartTokenCiphertext),
     liveActivityTokenEnvironment:
-      row.liveActivityTokenEnvironment === "sandbox" ||
-      row.liveActivityTokenEnvironment === "production"
+      row.platform === "ios" &&
+      (row.liveActivityTokenEnvironment === "sandbox" ||
+        row.liveActivityTokenEnvironment === "production")
         ? row.liveActivityTokenEnvironment
         : null,
-    liveActivityTokenUpdatedAt: row.liveActivityTokenUpdatedAt?.toISOString() ?? null,
-    interactiveLiveActivitiesCapable: row.liveActivityInteractionVersion === 1,
+    liveActivityTokenUpdatedAt:
+      row.platform === "ios" ? (row.liveActivityTokenUpdatedAt?.toISOString() ?? null) : null,
+    interactiveLiveActivitiesCapable:
+      row.platform === "ios" && row.liveActivityInteractionVersion === 1,
     createdAt: row.createdAt.toISOString(),
     lastSeenAt: row.lastSeenAt.toISOString(),
   };
@@ -77,10 +88,11 @@ export const devicesRoute = new Hono<AuthedEnv>()
           eq(device.id, parsed.data.deviceId),
           eq(device.userId, c.get("user").id),
           eq(device.active, true),
+          eq(device.platform, "ios"),
         ),
       )
       .returning({ id: device.id, updatedAt: device.liveActivityTokenUpdatedAt });
-    if (!registered) return c.json({ error: "Device not found" }, 404);
+    if (!registered) return c.json({ error: "iOS device not found" }, 404);
     return c.json({ deviceId: registered.id, updatedAt: registered.updatedAt?.toISOString() });
   })
   .post("/live-activity/update-token", async (c) => {
@@ -101,6 +113,7 @@ export const devicesRoute = new Hono<AuthedEnv>()
             eq(device.id, parsed.data.deviceId),
             eq(device.userId, userId),
             eq(device.active, true),
+            eq(device.platform, "ios"),
           ),
         )
         .get();
@@ -168,7 +181,7 @@ export const devicesRoute = new Hono<AuthedEnv>()
         deviceId: registeredDevice.id,
       } as const;
     });
-    if (result.kind === "device-not-found") return c.json({ error: "Device not found" }, 404);
+    if (result.kind === "device-not-found") return c.json({ error: "iOS device not found" }, 404);
     if (result.kind === "delivery-not-found") {
       return c.json({ error: "Live Activity delivery not found" }, 404);
     }
@@ -185,7 +198,7 @@ export const devicesRoute = new Hono<AuthedEnv>()
   })
   .post("/", async (c) => {
     const user = c.get("user");
-    const parsed = deviceRegisterSchema.safeParse(await c.req.json().catch(() => null));
+    const parsed = crossPlatformDeviceRegisterSchema.safeParse(await c.req.json().catch(() => null));
     if (!parsed.success) {
       return c.json({ error: "Invalid device registration", issues: parsed.error.issues }, 400);
     }
@@ -212,22 +225,26 @@ export const devicesRoute = new Hono<AuthedEnv>()
     const now = new Date();
     const registration = db.transaction((tx) => {
       const previous = tx
-        .select({ id: device.id, userId: device.userId })
+        .select({ id: device.id, userId: device.userId, platform: device.platform })
         .from(device)
         .where(eq(device.expoPushToken, parsed.data.expoPushToken))
         .get();
       const ownerChanged = Boolean(previous && previous.userId !== user.id);
+      const platformChanged = Boolean(previous && previous.platform !== parsed.data.platform);
+      const isIos = parsed.data.platform === "ios";
       const registered = tx
         .insert(device)
         .values({
           id: newId("dev"),
           userId: user.id,
           expoPushToken: parsed.data.expoPushToken,
-          apnsToken: parsed.data.apnsToken ?? null,
-          platform: "ios",
+          apnsToken: isIos ? (parsed.data.apnsToken ?? null) : null,
+          platform: parsed.data.platform,
           deviceName: parsed.data.deviceName ?? null,
           interactionSchemaVersion: parsed.data.interactionSchemaVersion ?? null,
-          liveActivityInteractionVersion: parsed.data.liveActivityInteractionVersion ?? null,
+          liveActivityInteractionVersion: isIos
+            ? (parsed.data.liveActivityInteractionVersion ?? null)
+            : null,
           active: true,
           createdAt: now,
           lastSeenAt: now,
@@ -236,13 +253,16 @@ export const devicesRoute = new Hono<AuthedEnv>()
           target: device.expoPushToken,
           set: {
             userId: user.id,
-            apnsToken: parsed.data.apnsToken ?? null,
+            apnsToken: isIos ? (parsed.data.apnsToken ?? null) : null,
+            platform: parsed.data.platform,
             deviceName: parsed.data.deviceName ?? null,
             interactionSchemaVersion: parsed.data.interactionSchemaVersion ?? null,
-            liveActivityInteractionVersion: parsed.data.liveActivityInteractionVersion ?? null,
+            liveActivityInteractionVersion: isIos
+              ? (parsed.data.liveActivityInteractionVersion ?? null)
+              : null,
             active: true,
             lastSeenAt: now,
-            ...(ownerChanged
+            ...(ownerChanged || platformChanged || !isIos
               ? {
                   liveActivityPushToStartTokenCiphertext: null,
                   liveActivityTokenEnvironment: null,
@@ -254,13 +274,13 @@ export const devicesRoute = new Hono<AuthedEnv>()
         })
         .returning()
         .get();
-      if (ownerChanged && previous) {
+      if ((ownerChanged || platformChanged) && previous) {
         tx.update(liveActivityDelivery)
           .set({
             status: "failed",
             updateTokenCiphertext: null,
             updateTokenUpdatedAt: null,
-            lastApnsReason: "OwnerChanged",
+            lastApnsReason: platformChanged ? "PlatformChanged" : "OwnerChanged",
             updatedAt: now,
           })
           .where(
