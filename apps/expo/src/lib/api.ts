@@ -17,7 +17,7 @@ import type {
   LiveActivityPushToStartTokenInput,
   LiveActivityUpdateTokenInput,
 } from "@hark/contracts";
-import { apiErrorFromBody } from "./api-error";
+import { ApiError, apiErrorFromBody } from "./api-error";
 import { API_URL, getCookie } from "./auth";
 
 export type { NotificationDetailFailure } from "./api-error";
@@ -44,13 +44,37 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   return body;
 }
 
-export const api = {
-  listDevices: () => request<{ devices: DeviceDto[] }>("/api/devices"),
-  registerDevice: (input: CrossPlatformDeviceRegisterInput) =>
+async function registerDevice(input: CrossPlatformDeviceRegisterInput) {
+  const send = (payload: CrossPlatformDeviceRegisterInput) =>
     request<{ device: { id: string } }>("/api/devices", {
       method: "POST",
-      body: JSON.stringify(input),
-    }),
+      body: JSON.stringify(payload),
+    });
+
+  try {
+    return await send(input);
+  } catch (error) {
+    // Android builds can be tested against an older Hark server before the
+    // Android-aware backend in this PR is deployed. Expo push tokens are
+    // transport-neutral, so legacy servers can still deliver through FCM even
+    // though they temporarily record the device as iOS. Once the new server is
+    // live, the first registration succeeds with platform=android and this path
+    // is never used.
+    if (
+      input.platform !== "android" ||
+      !(error instanceof ApiError) ||
+      error.status !== 400 ||
+      !error.message.includes("Invalid device registration")
+    ) {
+      throw error;
+    }
+    return send({ ...input, platform: "ios" });
+  }
+}
+
+export const api = {
+  listDevices: () => request<{ devices: DeviceDto[] }>("/api/devices"),
+  registerDevice,
   unregisterDevice: (input: DeviceUnregisterInput) =>
     request<{ ok: true }>("/api/devices", {
       method: "DELETE",
