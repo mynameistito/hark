@@ -6,7 +6,9 @@
   "scripts": {
     "start": "expo start",
     "ios": "expo run:ios",
+    "android": "expo run:android",
     "prebuild": "expo prebuild -p ios",
+    "prebuild:android": "expo prebuild -p android",
     "generate:icons": "swift scripts/generate-app-icons.swift",
     "typecheck": "tsc --noEmit",
     "test": "vitest run"
