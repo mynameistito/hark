@@ -23,6 +23,10 @@ import { API_URL, getCookie } from "./auth";
 export type { NotificationDetailFailure } from "./api-error";
 export { ApiError, classifyNotificationDetailFailure } from "./api-error";
 
+type CrossPlatformDeviceRegisterInput = Omit<DeviceRegisterInput, "platform"> & {
+  platform: "ios" | "android";
+};
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const cookie = getCookie();
   const response = await fetch(`${API_URL}${path}`, {
@@ -42,7 +46,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 
 export const api = {
   listDevices: () => request<{ devices: DeviceDto[] }>("/api/devices"),
-  registerDevice: (input: DeviceRegisterInput) =>
+  registerDevice: (input: CrossPlatformDeviceRegisterInput) =>
     request<{ device: { id: string } }>("/api/devices", {
       method: "POST",
       body: JSON.stringify(input),
