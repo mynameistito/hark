@@ -2,7 +2,7 @@ import * as AppleAuthentication from "expo-apple-authentication";
 import { Redirect } from "expo-router";
 import { StatusBar } from "expo-status-bar";
 import { useState } from "react";
-import { ActivityIndicator, Pressable, StyleSheet, Text, View } from "react-native";
+import { ActivityIndicator, Platform, Pressable, StyleSheet, Text, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { trackAppEvent } from "../src/lib/analytics";
 import { signInWithApple } from "../src/lib/apple-auth";
@@ -69,17 +69,21 @@ export default function SignInScreen() {
           <ActivityIndicator color={colors.accent} />
         ) : (
           <>
-            <AppleAuthentication.AppleAuthenticationButton
-              buttonStyle={AppleAuthentication.AppleAuthenticationButtonStyle.BLACK}
-              buttonType={AppleAuthentication.AppleAuthenticationButtonType.CONTINUE}
-              cornerRadius={26}
-              onPress={() => {
-                if (!busy) void continueWithApple();
-              }}
-              style={[styles.appleButton, busy && styles.buttonDisabled]}
-            />
-            {busy === "apple" ? (
-              <ActivityIndicator color={colors.ink} style={styles.appleSpinner} />
+            {Platform.OS === "ios" ? (
+              <>
+                <AppleAuthentication.AppleAuthenticationButton
+                  buttonStyle={AppleAuthentication.AppleAuthenticationButtonStyle.BLACK}
+                  buttonType={AppleAuthentication.AppleAuthenticationButtonType.CONTINUE}
+                  cornerRadius={26}
+                  onPress={() => {
+                    if (!busy) void continueWithApple();
+                  }}
+                  style={[styles.appleButton, busy && styles.buttonDisabled]}
+                />
+                {busy === "apple" ? (
+                  <ActivityIndicator color={colors.ink} style={styles.appleSpinner} />
+                ) : null}
+              </>
             ) : null}
             <Pressable
               accessibilityRole="button"
