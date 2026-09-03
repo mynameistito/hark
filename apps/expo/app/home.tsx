@@ -35,6 +35,24 @@ type RegistrationState = "idle" | "working" | "registered" | "error";
 
 const EXPO_TOKEN_KEY = "hark.device.expoPushToken";
 const APNS_TOKEN_KEY = "hark.device.apnsToken";
+const ANDROID_DEFAULT_CHANNEL = "hark_default";
+const ANDROID_INTERACTIVE_CHANNEL = "hark_interactive";
+
+async function ensureAndroidNotificationChannels(): Promise<void> {
+  if (Platform.OS !== "android") return;
+  await Promise.all([
+    Notifications.setNotificationChannelAsync(ANDROID_DEFAULT_CHANNEL, {
+      name: "Notifications",
+      importance: Notifications.AndroidImportance.HIGH,
+      vibrationPattern: [0, 250, 250, 250],
+    }),
+    Notifications.setNotificationChannelAsync(ANDROID_INTERACTIVE_CHANNEL, {
+      name: "Requests",
+      importance: Notifications.AndroidImportance.HIGH,
+      vibrationPattern: [0, 250, 250, 250],
+    }),
+  ]);
+}
 
 export default function HomeScreen() {
   const { data: session, isPending } = useSession();
@@ -49,6 +67,7 @@ export default function HomeScreen() {
   const autoRegistrationAttempted = useRef(false);
 
   const refreshPermission = useCallback(async () => {
+    await ensureAndroidNotificationChannels();
     const current = await Notifications.getPermissionsAsync();
     setPermission(current.granted ? "granted" : current.canAskAgain ? "undetermined" : "denied");
   }, []);
@@ -70,9 +89,12 @@ export default function HomeScreen() {
 
   const requestPermission = async () => {
     void trackAppEvent("notification_permission_prompted", { path: "/home" });
-    const result = await Notifications.requestPermissionsAsync({
-      ios: { allowAlert: true, allowBadge: true, allowSound: true },
-    });
+    await ensureAndroidNotificationChannels();
+    const result = await Notifications.requestPermissionsAsync(
+      Platform.OS === "ios"
+        ? { ios: { allowAlert: true, allowBadge: true, allowSound: true } }
+        : undefined,
+    );
     setPermission(result.granted ? "granted" : result.canAskAgain ? "undetermined" : "denied");
     void trackAppEvent("notification_permission_resolved", {
       path: "/home",
@@ -89,8 +111,9 @@ export default function HomeScreen() {
     setLastError(null);
     try {
       if (!Device.isDevice) {
-        throw new Error("Push notifications require a physical iPhone.");
+        throw new Error("Push notifications require a physical device.");
       }
+      await ensureAndroidNotificationChannels();
       const projectId =
         (Constants.expoConfig?.extra?.eas as { projectId?: string } | undefined)?.projectId ??
         process.env.EXPO_PUBLIC_EAS_PROJECT_ID;
@@ -99,21 +122,23 @@ export default function HomeScreen() {
       ).data;
 
       let apns: string | null = null;
-      try {
-        const nativeToken = await Notifications.getDevicePushTokenAsync();
-        apns = typeof nativeToken.data === "string" ? nativeToken.data : null;
-      } catch {
-        // APNs token is optional; delivery uses the Expo push token.
+      if (Platform.OS === "ios") {
+        try {
+          const nativeToken = await Notifications.getDevicePushTokenAsync();
+          apns = typeof nativeToken.data === "string" ? nativeToken.data : null;
+        } catch {
+          // APNs token is optional; delivery uses the Expo push token.
+        }
       }
 
       await registerInteractionCategories();
       const registered = await api.registerDevice({
         expoPushToken: expoToken,
         ...(apns ? { apnsToken: apns } : {}),
-        platform: "ios",
+        platform: Platform.OS === "android" ? "android" : "ios",
         deviceName: Device.deviceName ?? undefined,
         interactionSchemaVersion: 1,
-        ...(Number.parseFloat(String(Platform.Version)) >= 17
+        ...(Platform.OS === "ios" && Number.parseFloat(String(Platform.Version)) >= 17
           ? { liveActivityInteractionVersion: 1 as const }
           : {}),
       });
@@ -250,6 +275,8 @@ export default function HomeScreen() {
   }
 
   const ready = permission === "granted" && registration === "registered";
+  const deviceLabel = Platform.OS === "android" ? "Android device" : "iPhone";
+  const settingsLabel = Platform.OS === "android" ? "Android Settings" : "iOS Settings";
 
   if (__DEV__ && !Device.isDevice) return <Redirect href="/inbox" />;
   if (ready) return <Redirect href="/inbox" />;
@@ -270,8 +297,8 @@ export default function HomeScreen() {
 
         <Text style={styles.greeting}>
           {ready
-            ? "This iPhone is ready to receive notifications."
-            : "Two steps and this iPhone starts receiving your webhooks."}
+            ? `This ${deviceLabel} is ready to receive notifications.`
+            : `Two steps and this ${deviceLabel} starts receiving your webhooks.`}
         </Text>
 
         {ready ? (
@@ -287,8 +314,10 @@ export default function HomeScreen() {
               done={permission === "granted"}
               body={
                 permission === "denied"
-                  ? "Notifications are turned off. Enable them for Hark in the iOS Settings app."
-                  : "Hark shows each webhook as a communication notification with your service's name and avatar."
+                  ? `Notifications are turned off. Enable them for Hark in ${settingsLabel}.`
+                  : Platform.OS === "android"
+                    ? "Hark shows each webhook as a notification and keeps interactive requests actionable from Android."
+                    : "Hark shows each webhook as a communication notification with your service's name and avatar."
               }
               actionLabel={permission === "granted" ? undefined : "Allow notifications"}
               onAction={permission === "denied" ? undefined : requestPermission}
@@ -301,7 +330,7 @@ export default function HomeScreen() {
               body={
                 registration === "registered"
                   ? "This device is registered and ready when notifications are enabled."
-                  : "Links this iPhone to your account so your services can reach it."
+                  : `Links this ${deviceLabel} to your account so your services can reach it.`
               }
               actionLabel={
                 registration === "registered"
@@ -453,13 +482,17 @@ function ActivityLogRow({ activityEvent }: { activityEvent: EventDto }) {
         <Text style={styles.activityStatus}>{activityStatus(activityEvent)}</Text>
       </View>
       {expandable ? (
-        <SymbolView
-          name={expanded ? "chevron.up" : "chevron.down"}
-          size={11}
-          style={styles.activityChevron}
-          tintColor={colors.soft}
-          weight="semibold"
-        />
+        Platform.OS === "ios" ? (
+          <SymbolView
+            name={expanded ? "chevron.up" : "chevron.down"}
+            size={11}
+            style={styles.activityChevron}
+            tintColor={colors.soft}
+            weight="semibold"
+          />
+        ) : (
+          <Text style={styles.activityChevronText}>{expanded ? "⌃" : "⌄"}</Text>
+        )
       ) : null}
     </Pressable>
   );
@@ -736,6 +769,12 @@ const styles = StyleSheet.create({
   },
   activityChevron: {
     marginTop: 4,
+  },
+  activityChevronText: {
+    marginTop: 2,
+    color: colors.soft,
+    fontFamily: fonts.medium,
+    fontSize: 16,
   },
   activityStatus: {
     marginTop: 1,
