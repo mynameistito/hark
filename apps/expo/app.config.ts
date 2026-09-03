@@ -8,7 +8,7 @@ export default ({ config: _config }: ConfigContext): ExpoConfig => ({
   scheme: "hark",
   orientation: "portrait",
   userInterfaceStyle: "light",
-  platforms: ["ios"],
+  platforms: ["ios", "android"],
   ios: {
     bundleIdentifier: "ceo.ryan.hark",
     usesAppleSignIn: true,
@@ -25,6 +25,16 @@ export default ({ config: _config }: ConfigContext): ExpoConfig => ({
       ITSAppUsesNonExemptEncryption: false,
       NSUserActivityTypes: ["INSendMessageIntent"],
     },
+  },
+  android: {
+    package: "ceo.ryan.hark",
+    adaptiveIcon: {
+      foregroundImage: "./assets/icon.png",
+      backgroundColor: "#035B49",
+    },
+    ...(process.env.GOOGLE_SERVICES_JSON_PATH
+      ? { googleServicesFile: process.env.GOOGLE_SERVICES_JSON_PATH }
+      : {}),
   },
   plugins: [
     "./plugins/with-ios-scene-delegate",
@@ -112,6 +122,7 @@ export default ({ config: _config }: ConfigContext): ExpoConfig => ({
       "expo-notifications",
       {
         enableBackgroundRemoteNotifications: true,
+        defaultChannel: "hark_default",
       },
     ],
     "expo-web-browser",
